@@ -1,4 +1,5 @@
 mod apps;
+mod claude_code;
 mod files;
 mod fuzzy;
 mod location;
@@ -200,6 +201,42 @@ async fn open_file(path: String, confirmed: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn claude_code_status() -> Result<claude_code::Status, String> {
+    tauri::async_runtime::spawn_blocking(claude_code::status).await.map_err(|e| e.to_string())
+}
+
+/// Un tour de Claude Code : chaque ligne JSON du flux part vers l'interface par `on_line`.
+#[tauri::command]
+async fn claude_code_send(
+    app: AppHandle,
+    prompt: String,
+    model: String,
+    resume: Option<String>,
+    on_line: tauri::ipc::Channel<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let server = app.state::<Arc<mcp::McpServer>>();
+        let workspace = claude_code::workspace()?;
+        let args = claude_code::build_args(
+            &model,
+            resume.as_deref(),
+            &server.config_json(),
+            &claude_code::system_prompt(&workspace),
+        );
+        claude_code::run(&app.state::<claude_code::Running>(), &prompt, args, |line| {
+            let _ = on_line.send(line);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn claude_code_cancel(running: tauri::State<claude_code::Running>) {
+    running.cancel();
+}
+
+#[tauri::command]
 fn mcp_set_tools(tools: Vec<serde_json::Value>, server: tauri::State<Arc<mcp::McpServer>>) {
     server.set_tools(tools);
 }
@@ -267,6 +304,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .manage(AppIndex::default())
+        .manage(claude_code::Running::default())
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -327,6 +365,9 @@ pub fn run() {
             get_location,
             mcp_set_tools,
             mcp_reply,
+            claude_code_status,
+            claude_code_send,
+            claude_code_cancel,
             open_url,
             open_settings,
             media_control,
