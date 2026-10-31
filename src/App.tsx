@@ -122,6 +122,8 @@ export default function App() {
       status: (s) => live() && (setStatus(s), setBusy(true)),
       text: (d) => live() && setAnswer((a) => a + d),
       sources: (list) => live() && setSources(list),
+      // Remplacé par la confirmation dans la bulle (tâche 5) : d'ici là, on refuse par prudence.
+      confirm: async () => false,
     };
     const finish = (autoClose: boolean) => {
       if (!live()) return;

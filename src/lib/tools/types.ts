@@ -11,6 +11,8 @@ export interface Ui {
   status(text: string): void;
   text(delta: string): void;
   sources(list: Source[]): void;
+  /** Demande une validation (Entrée / Échap) ; `action` est le libellé du bouton de validation. */
+  confirm(message: string, action: string): Promise<boolean>;
 }
 
 export interface ToolContext {
