@@ -63,6 +63,7 @@ export async function executeTool(name: string, args: Args, ctx: ToolContext): P
   } catch (e) {
     result = { ok: false, message: errorMessage(e) };
   }
+  if (result.ok && tool.launches) ctx.ui.launched?.();
   const wait = MIN_STATUS_MS - (performance.now() - shownAt);
   if (wait > 0) await sleep(wait);
   return result;

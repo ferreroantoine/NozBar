@@ -34,6 +34,16 @@ describe("close_app", () => {
     expect(result).toMatchObject({ ok: true, message: "brave est fermé" });
   });
 
+  it("demande confirmation quand c'est Claude qui veut fermer une application", async () => {
+    vi.mocked(native.resolveClose).mockResolvedValue({ kind: "open", candidates: brave });
+    const { ctx } = context();
+    const permission = vi.fn(async () => "deny" as const);
+    const result = await CLOSE_TOOL.run({ name: "brave" }, { ...ctx, origin: "claude", ui: { ...ctx.ui, permission } });
+    expect(permission).toHaveBeenCalledWith("Claude veut fermer brave (2 fenêtres)", false);
+    expect(result.ok).toBe(false);
+    expect(native.closeApp).not.toHaveBeenCalled();
+  });
+
   it("demande laquelle en cas de doute", async () => {
     vi.mocked(native.resolveClose).mockResolvedValue({ kind: "choose", candidates: [brave, clyde] });
     const { ctx, ask } = context("Clyde (ouverte)");

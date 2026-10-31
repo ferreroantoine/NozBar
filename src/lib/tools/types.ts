@@ -13,6 +13,13 @@ export interface Ui {
   sources(list: Source[]): void;
   /** Demande une validation (Entrée / Échap) ; `action` est le libellé du bouton de validation. */
   confirm(message: string, action: string): Promise<boolean>;
+  /**
+   * Demande d'autorisation : « Autoriser » (once), « Toujours autoriser » (always, proposé seulement si
+   * `remember`) ou « Refuser » (deny). Échap ou bulle fermée valent un refus.
+   */
+  permission(message: string, remember: boolean): Promise<"once" | "always" | "deny">;
+  /** Un outil vient d'ouvrir une fenêtre : la bulle peut reprendre le focus qu'elle va perdre. */
+  launched?(): void;
   /** Pose une question à choix ; `null` si l'utilisateur annule. */
   ask(question: string, choices: string[], allowText: boolean): Promise<string | null>;
   /** L'expert (Claude) prend la main jusqu'à la fermeture de la bulle ; `label` s'affiche sur le badge. */
@@ -22,6 +29,8 @@ export interface Ui {
 export interface ToolContext {
   ui: Ui;
   signal: AbortSignal;
+  /** « claude » : appel venu de Claude Code par le pont MCP (règles plus strictes). */
+  origin?: "user" | "claude";
   search(query: string): Promise<{ summary: string; sources: Source[] }>;
 }
 
@@ -43,6 +52,8 @@ export interface Tool {
   parameters: JsonSchema;
   status(args: Args): string;
   run(args: Args, ctx: ToolContext): Promise<ToolResult>;
+  /** L'outil ouvre une fenêtre (application, page, fichier). */
+  launches?: boolean;
 }
 
 export const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");

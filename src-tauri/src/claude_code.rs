@@ -12,12 +12,9 @@ use std::sync::Mutex;
 use serde::Serialize;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-/// Outils utilisables sans demander : web et outils NozBar (qui ont leurs propres confirmations).
-/// La lecture dans le dossier de travail est libre d'office ; ailleurs, elle passe par la bulle
-/// (lecture libre + WebFetch permettrait à une page piégée de faire fuiter des fichiers).
-const ALLOWED_TOOLS: &str = "WebSearch,WebFetch,mcp__nozbar";
 
-pub fn build_args(model: &str, resume: Option<&str>, mcp_config: &str, system_prompt: &str) -> Vec<String> {
+/// `allowed` : outils autorisés sans demander, selon les réglages (voir `settings::allowed_tools`).
+pub fn build_args(model: &str, resume: Option<&str>, mcp_config: &str, system_prompt: &str, allowed: &str) -> Vec<String> {
     let mut args: Vec<String> = [
         "-p",
         "--output-format", "stream-json",
@@ -31,7 +28,7 @@ pub fn build_args(model: &str, resume: Option<&str>, mcp_config: &str, system_pr
         "--permission-prompt-tool", "mcp__nozbar__approve",
         // Écritures dans le dossier de travail sans demander ; le reste passe par la bulle.
         "--permission-mode", "acceptEdits",
-        "--allowedTools", ALLOWED_TOOLS,
+        "--allowedTools", allowed,
         "--append-system-prompt", system_prompt,
     ]
     .into_iter()
@@ -50,7 +47,7 @@ pub fn system_prompt(workspace: &std::path::Path) -> String {
         "Réponds en français, en markdown léger, de façon concise : quelques phrases ou une courte liste, sauf si on te demande plus.",
         "Pour interagir avec l'utilisateur, utilise les outils mcp__nozbar__ : ask_user pour une question à choix, \
          get_weather pour la météo, find_file et open_file pour les fichiers, open_app pour lancer une application, close_app pour en fermer une. \
-         Préfère toujours ces outils à une commande système : ils ne demandent pas de confirmation.",
+         Préfère toujours ces outils à une commande système : ils sont plus sûrs et plus simples à valider.",
         &format!("Ton dossier de travail est {} : ranges-y les fichiers que tu crées ou télécharges.", workspace.display()),
         "Les commandes système et les écritures hors de ce dossier demandent une confirmation à l'utilisateur : \
          ne les utilise que si c'est nécessaire.",
@@ -114,6 +111,25 @@ pub fn status() -> Status {
         .and_then(|v| v["loggedIn"].as_bool())
         .unwrap_or(false);
     Status { installed: true, logged_in }
+}
+
+/// Connexion au compte Claude par la procédure officielle, dans une console visible :
+/// elle ouvre le navigateur et peut demander de coller un code.
+pub fn login() -> Result<(), String> {
+    let exe = find_exe().ok_or("Claude Code n'est pas installé")?;
+    let mut cmd = Command::new("cmd");
+    cmd.creation_flags(CREATE_NO_WINDOW).args(["/c", "start", "Connexion à Claude"]).arg(&exe).args(["auth", "login"]);
+    for (name, _) in std::env::vars_os() {
+        if is_inherited_claude_var(&name.to_string_lossy()) {
+            cmd.env_remove(name);
+        }
+    }
+    cmd.spawn().map(|_| ()).map_err(|e| format!("Connexion impossible à lancer : {e}"))
+}
+
+pub fn logout() -> Result<(), String> {
+    let exe = find_exe().ok_or("Claude Code n'est pas installé")?;
+    command(&exe).args(["auth", "logout"]).output().map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Processus Claude Code en cours, pour pouvoir l'arrêter à la fermeture de la bulle.
@@ -211,7 +227,7 @@ mod tests {
 
     #[test]
     fn builds_a_streaming_run_wired_to_nozbar() {
-        let args = build_args("opus", None, "{\"mcpServers\":{}}", "consignes");
+        let args = build_args("opus", None, "{\"mcpServers\":{}}", "consignes", "WebSearch,mcp__nozbar");
         assert_eq!(args[0], "-p");
         assert_eq!(value_after(&args, "--output-format"), Some("stream-json"));
         assert!(args.iter().any(|a| a == "--include-partial-messages"));
@@ -228,7 +244,7 @@ mod tests {
 
     #[test]
     fn ignores_the_users_global_claude_settings_and_gates_reads() {
-        let args = build_args("sonnet", None, "{}", "");
+        let args = build_args("sonnet", None, "{}", "", &crate::settings::allowed_tools(&Default::default()));
         // Les règles « allow » des réglages globaux contourneraient la confirmation dans la bulle.
         assert!(args.iter().any(|a| a == "--setting-sources="));
         // Lire hors du dossier de travail passe par la bulle : lecture libre + WebFetch = fuite possible.
@@ -254,7 +270,7 @@ mod tests {
 
     #[test]
     fn resumes_the_bubble_session() {
-        let args = build_args("sonnet", Some("abc-123"), "{}", "");
+        let args = build_args("sonnet", Some("abc-123"), "{}", "", "mcp__nozbar");
         assert_eq!(value_after(&args, "--resume"), Some("abc-123"));
     }
 
@@ -308,7 +324,7 @@ mod tests {
             probe.display().to_string().replace('\\', "/")
         );
         let prompt = prompt.as_str();
-        let args = build_args("haiku", None, &server.config_json(), "Réponds en français.");
+        let args = build_args("haiku", None, &server.config_json(), "Réponds en français.", "mcp__nozbar");
         let mut result = String::new();
         let started = std::time::Instant::now();
         run(&running, prompt, args, |line| {

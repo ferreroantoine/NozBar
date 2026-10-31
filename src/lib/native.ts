@@ -1,6 +1,7 @@
 // Commandes Tauri exposées par le cœur Rust (src-tauri/src/lib.rs).
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { Settings } from "./settings";
 
 export type Provider = "gemini" | "anthropic";
 
@@ -49,6 +50,11 @@ export const native = {
     return invoke<void>("claude_code_send", { prompt, model, resume, onLine: channel });
   },
   claudeCodeCancel: () => invoke<void>("claude_code_cancel"),
+  getSettings: () => invoke<Settings>("get_settings"),
+  setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
+  openPreferences: () => invoke<void>("open_preferences"),
+  claudeCodeLogin: () => invoke<void>("claude_code_login"),
+  claudeCodeLogout: () => invoke<void>("claude_code_logout"),
   mcpSetTools: (tools: unknown[]) => invoke<void>("mcp_set_tools", { tools }),
   mcpReply: (id: number, text: string, isError: boolean) => invoke<void>("mcp_reply", { id, text, isError }),
   openSettings: (page: string) => invoke<void>("open_settings", { page }),

@@ -1,20 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../native", () => ({
-  native: { findFiles: vi.fn(), checkFile: vi.fn(), openFile: vi.fn(async () => {}) },
+  native: { findFiles: vi.fn(), checkFile: vi.fn(), openFile: vi.fn(async () => {}), setSettings: vi.fn(async () => {}) },
 }));
 
 import { native } from "../native";
+import { settingsStore } from "../settings";
 import { FILE_TOOLS } from "./files";
 import type { ToolContext } from "./types";
 
 const openFile = FILE_TOOLS.find((t) => t.name === "open_file")!;
 const findFile = FILE_TOOLS.find((t) => t.name === "find_file")!;
 
-function context(confirmed: boolean) {
-  const confirm = vi.fn(async () => confirmed);
+function context(confirmed: boolean | "always") {
+  const confirm = vi.fn(async (_m: string) => (confirmed === "always" ? "always" : confirmed ? "once" : "deny"));
   const ctx = {
-    ui: { status() {}, text() {}, sources() {}, confirm },
+    ui: { status() {}, text() {}, sources() {}, permission: confirm },
     signal: new AbortController().signal,
     search: async () => ({ summary: "", sources: [] }),
   } as unknown as ToolContext;
@@ -29,9 +30,49 @@ describe("open_file", () => {
     vi.mocked(native.checkFile).mockResolvedValue({ name: "Setup.exe", needsConfirmation: true, inClaudeWorkspace: false });
     const { ctx, confirm } = context(false);
     const result = await openFile.run({ path: "C:\\Users\\moi\\Downloads\\Setup.exe." }, ctx);
-    expect(confirm).toHaveBeenCalledWith("Lancer Setup.exe ?", "Lancer");
+    expect(confirm).toHaveBeenCalledWith("Lancer Setup.exe ?", true);
     expect(result.ok).toBe(false);
     expect(native.openFile).not.toHaveBeenCalled();
+  });
+
+  it("lance sans demander quand « Lancer des programmes » est sur Toujours", async () => {
+    vi.mocked(native.checkFile).mockResolvedValue({ name: "Setup.exe", needsConfirmation: true, inClaudeWorkspace: false });
+    await settingsStore.setPolicy("programs", "always");
+    const { ctx, confirm } = context(false);
+    const result = await openFile.run({ path: "C:\\D\\Setup.exe" }, ctx);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    await settingsStore.setPolicy("programs", "ask");
+  });
+
+  it("refuse sans demander quand « Lancer des programmes » est sur Refuser", async () => {
+    vi.mocked(native.checkFile).mockResolvedValue({ name: "Setup.exe", needsConfirmation: true, inClaudeWorkspace: false });
+    await settingsStore.setPolicy("programs", "never");
+    const { ctx, confirm } = context(true);
+    const result = await openFile.run({ path: "C:\\D\\Setup.exe" }, ctx);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(native.openFile).not.toHaveBeenCalled();
+    await settingsStore.setPolicy("programs", "ask");
+  });
+
+  it("refuse à Claude un programme de son propre dossier, quelle que soit la règle", async () => {
+    vi.mocked(native.checkFile).mockResolvedValue({ name: "maj.bat", needsConfirmation: true, inClaudeWorkspace: true });
+    await settingsStore.setPolicy("programs", "always");
+    const { ctx, confirm } = context(true);
+    const result = await openFile.run({ path: "C:\\Users\\moi\\Documents\\NozBar\\maj.bat" }, { ...ctx, origin: "claude" });
+    expect(result.ok).toBe(false);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(native.openFile).not.toHaveBeenCalled();
+    await settingsStore.setPolicy("programs", "ask");
+  });
+
+  it("« Toujours autoriser » retient la règle des programmes", async () => {
+    vi.mocked(native.checkFile).mockResolvedValue({ name: "Setup.exe", needsConfirmation: true, inClaudeWorkspace: false });
+    const { ctx } = context("always");
+    await openFile.run({ path: "C:\\D\\Setup.exe" }, ctx);
+    expect(settingsStore.policy("programs")).toBe("always");
+    await settingsStore.setPolicy("programs", "ask");
   });
 
   it("transmet la confirmation au cœur Rust", async () => {

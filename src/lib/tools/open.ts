@@ -14,6 +14,7 @@ async function openCandidate(c: OpenCandidate, ctx: ToolContext): Promise<ToolRe
 
 export const OPEN_TOOL: Tool = {
   name: "open_app",
+  launches: true,
   description:
     "Ouvre une application installée ou un fichier (Téléchargements, Bureau, Documents) à partir de son nom. " +
     "En cas de doute entre plusieurs cibles, l'utilisateur choisit lui-même dans la bulle.",

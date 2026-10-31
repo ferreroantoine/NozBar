@@ -1,6 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { claudeTools, executeTool, geminiDeclarations, TOOLS, type ToolContext } from "./index";
 
+describe("executeTool — lancements", () => {
+  it("prévient la bulle quand un outil a ouvert quelque chose, pour qu'elle reprenne le focus", async () => {
+    vi.stubGlobal("requestAnimationFrame", (cb: () => void) => setTimeout(cb, 0));
+    const tool = TOOLS.find((t) => t.name === "open_url")!;
+    vi.spyOn(tool, "run").mockResolvedValue({ ok: true, message: "ouvert" });
+    const launched = vi.fn();
+    const ctx = { ui: { status() {}, launched }, signal: new AbortController().signal } as unknown as ToolContext;
+    await executeTool("open_url", { url: "https://exemple.fr" }, ctx);
+    expect(launched).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
+
 describe("executeTool", () => {
   it("n'exécute pas un outil dont le tour a été annulé pendant l'attente d'affichage", async () => {
     vi.stubGlobal("requestAnimationFrame", (cb: () => void) => setTimeout(cb, 0));

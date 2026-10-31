@@ -72,12 +72,22 @@ pub fn input_state() -> (bool, bool) {
     (mouse, keys)
 }
 
-/// Windows refuse de rendre le premier plan à une fenêtre qui vient de le perdre, sauf pendant une
-/// saisie clavier : on encadre la reprise du focus par un appui sur Alt (technique classique).
-pub fn with_alt_held(f: impl FnOnce()) {
-    let _ = send_keys(&[(VK_MENU, false)]);
-    f();
-    let _ = send_keys(&[(VK_MENU, true)]);
+/// Windows refuse de rendre le premier plan à une fenêtre qui vient de le perdre. En rattachant
+/// brièvement notre fil à celui de la fenêtre active, la demande est acceptée — sans simuler de touche
+/// (un faux Alt activerait la barre de menus de l'application ouverte).
+pub fn bring_to_front(hwnd: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow};
+    unsafe {
+        let ours = GetCurrentThreadId();
+        let theirs = GetWindowThreadProcessId(GetForegroundWindow(), None);
+        let attached = theirs != 0 && theirs != ours && AttachThreadInput(ours, theirs, true).as_bool();
+        let _ = SetForegroundWindow(HWND(hwnd as _));
+        if attached {
+            let _ = AttachThreadInput(ours, theirs, false);
+        }
+    }
 }
 
 fn send_keys(keys: &[(VIRTUAL_KEY, bool)]) -> Result<(), String> {

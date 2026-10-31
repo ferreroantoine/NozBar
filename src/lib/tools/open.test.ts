@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../native", () => ({
-  native: { resolveOpen: vi.fn(), launchApp: vi.fn(async () => {}), checkFile: vi.fn(), openFile: vi.fn(async () => {}) },
+  native: { resolveOpen: vi.fn(), launchApp: vi.fn(async () => {}), checkFile: vi.fn(), openFile: vi.fn(async () => {}), setSettings: vi.fn(async () => {}) },
 }));
 
 import { native } from "../native";
@@ -15,7 +15,7 @@ const launcher = { label: "horizon-launcher.exe", kind: "file", target: "C:\\D\\
 function context(answer: string | null = null) {
   const ask = vi.fn(async () => answer);
   const ctx = {
-    ui: { status() {}, text() {}, sources() {}, ask, confirm: async () => true, expert() {} },
+    ui: { status() {}, text() {}, sources() {}, ask, confirm: async () => true, permission: async () => "once", expert() {} },
     signal: new AbortController().signal,
     search: async () => ({ summary: "", sources: [] }),
   } as unknown as ToolContext;
@@ -38,9 +38,9 @@ describe("open_app", () => {
     vi.mocked(native.resolveOpen).mockResolvedValue({ kind: "open", candidates: launcher });
     vi.mocked(native.checkFile).mockResolvedValue({ name: "horizon-launcher.exe", needsConfirmation: true, inClaudeWorkspace: false });
     const { ctx } = context();
-    const confirm = vi.spyOn(ctx.ui, "confirm");
+    const confirm = vi.spyOn(ctx.ui, "permission");
     await OPEN_TOOL.run({ name: "horizon launcher" }, ctx);
-    expect(confirm).toHaveBeenCalledWith("Lancer horizon-launcher.exe ?", "Lancer");
+    expect(confirm).toHaveBeenCalledWith("Lancer horizon-launcher.exe ?", true);
     expect(native.openFile).toHaveBeenCalledWith(launcher.target, true);
     expect(native.launchApp).not.toHaveBeenCalled();
   });

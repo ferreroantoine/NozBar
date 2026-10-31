@@ -2,6 +2,7 @@
 
 import { listen } from "@tauri-apps/api/event";
 import { native } from "./native";
+import { categoryOf, decide, settingsStore, type SettingsStore } from "./settings";
 import { errorMessage, executeTool, TOOLS, type ToolContext, type Ui } from "./tools";
 
 /** Claude Code a sa propre recherche web, et il est lui-même l'expert. */
@@ -48,29 +49,35 @@ export function describeRequest(tool: string, input: Record<string, unknown>): s
   }
 }
 
-export async function handleMcpCall(call: McpCall, active: ActiveTurn): Promise<{ text: string; isError: boolean }> {
+export async function handleMcpCall(
+  call: McpCall,
+  active: ActiveTurn,
+  store: SettingsStore = settingsStore,
+): Promise<{ text: string; isError: boolean }> {
   const args = call.args ?? {};
   if (call.name === "approve") {
     const tool = str(args.tool_name);
     const input = args.input && typeof args.input === "object" ? (args.input as Record<string, unknown>) : {};
-    const tooLong = str(input.command).length > MAX_COMMAND_CHARS;
+    const deny = (message: string) => ({ text: JSON.stringify({ behavior: "deny", message }), isError: false });
     // Sans tour en cours (bulle fermée), personne ne peut répondre : on refuse.
-    const allowed =
-      !tooLong &&
-      active !== null &&
-      !active.signal.aborted &&
-      (await active.ui.confirm(describeRequest(tool, input), "Autoriser"));
-    const decision = allowed
-      ? { behavior: "allow", updatedInput: input }
-      : {
-          behavior: "deny",
-          message: tooLong
-            ? "Commande trop longue pour être relue : découpe-la en étapes plus courtes"
-            : active
-              ? "Refusé par l'utilisateur"
-              : "Aucune conversation en cours",
-        };
-    return { text: JSON.stringify(decision), isError: false };
+    if (!active || active.signal.aborted) return deny("Aucune conversation en cours");
+    const tooLong = str(input.command).length > MAX_COMMAND_CHARS;
+    const category = categoryOf(tool);
+    const allowed = await decide(
+      category,
+      // Une commande qu'on ne peut pas relire n'est pas proposée : c'est un refus.
+      // « Toujours autoriser » n'est proposé que si une catégorie peut le retenir.
+      async () => (tooLong ? "deny" : active.ui.permission(describeRequest(tool, input), category !== null)),
+      store,
+    );
+    if (!allowed) {
+      return deny(
+        tooLong
+          ? "Commande trop longue pour être relue : découpe-la en étapes plus courtes"
+          : "Refusé par l'utilisateur (ou par ses paramètres)",
+      );
+    }
+    return { text: JSON.stringify({ behavior: "allow", updatedInput: input }), isError: false };
   }
 
   if (!active || active.signal.aborted) return { text: "Aucune conversation NozBar en cours", isError: true };
@@ -91,6 +98,7 @@ export async function handleMcpCall(call: McpCall, active: ActiveTurn): Promise<
   const ctx: ToolContext = {
     ui: active.ui,
     signal: active.signal,
+    origin: "claude",
     search: () => Promise.reject(new Error("Recherche indisponible")),
   };
   try {
