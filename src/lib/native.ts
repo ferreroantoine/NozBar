@@ -1,6 +1,6 @@
 // Commandes Tauri exposées par le cœur Rust (src-tauri/src/lib.rs).
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 export type Provider = "gemini" | "anthropic";
 
@@ -19,10 +19,20 @@ export const native = {
   setApiKey: (provider: Provider, key: string) => invoke<void>("set_api_key", { provider, key }),
   openApp: (name: string) => invoke<{ name: string }>("open_app", { name }),
   findFiles: (query: string, kind?: string) => invoke<FoundFile[]>("find_files", { query, kind: kind ?? null }),
-  checkFile: (path: string) => invoke<{ name: string; needsConfirmation: boolean }>("check_file", { path }),
+  checkFile: (path: string) => invoke<{ name: string; needsConfirmation: boolean; inClaudeWorkspace: boolean }>("check_file", { path }),
   openFile: (path: string, confirmed: boolean) => invoke<void>("open_file", { path, confirmed }),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   getLocation: () => invoke<{ lat: number; lon: number }>("get_location"),
+  claudeCodeStatus: () => invoke<{ installed: boolean; loggedIn: boolean }>("claude_code_status"),
+  /** Un tour de Claude Code ; chaque ligne JSON du flux arrive dans `onLine`. */
+  claudeCodeSend: (prompt: string, model: string, resume: string | null, onLine: (line: string) => void) => {
+    const channel = new Channel<string>();
+    channel.onmessage = onLine;
+    return invoke<void>("claude_code_send", { prompt, model, resume, onLine: channel });
+  },
+  claudeCodeCancel: () => invoke<void>("claude_code_cancel"),
+  mcpSetTools: (tools: unknown[]) => invoke<void>("mcp_set_tools", { tools }),
+  mcpReply: (id: number, text: string, isError: boolean) => invoke<void>("mcp_reply", { id, text, isError }),
   openSettings: (page: string) => invoke<void>("open_settings", { page }),
   mediaControl: (action: string) => invoke<void>("media_control", { action }),
   setVolume: (level?: number, delta?: number) =>

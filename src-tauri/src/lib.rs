@@ -1,11 +1,13 @@
 mod apps;
+mod claude_code;
 mod files;
 mod fuzzy;
 mod location;
+mod mcp;
 mod secrets;
 mod system;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -199,6 +201,52 @@ async fn open_file(path: String, confirmed: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn claude_code_status() -> Result<claude_code::Status, String> {
+    tauri::async_runtime::spawn_blocking(claude_code::status).await.map_err(|e| e.to_string())
+}
+
+/// Un tour de Claude Code : chaque ligne JSON du flux part vers l'interface par `on_line`.
+#[tauri::command]
+async fn claude_code_send(
+    app: AppHandle,
+    prompt: String,
+    model: String,
+    resume: Option<String>,
+    on_line: tauri::ipc::Channel<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let server = app.state::<Arc<mcp::McpServer>>();
+        let workspace = claude_code::workspace()?;
+        let args = claude_code::build_args(
+            &model,
+            resume.as_deref(),
+            &server.config_json(),
+            &claude_code::system_prompt(&workspace),
+        );
+        claude_code::run(&app.state::<claude_code::Running>(), &prompt, args, |line| {
+            let _ = on_line.send(line);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn claude_code_cancel(running: tauri::State<claude_code::Running>) {
+    running.cancel();
+}
+
+#[tauri::command]
+fn mcp_set_tools(tools: Vec<serde_json::Value>, server: tauri::State<Arc<mcp::McpServer>>) {
+    server.set_tools(tools);
+}
+
+#[tauri::command]
+fn mcp_reply(id: u64, text: String, is_error: bool, server: tauri::State<Arc<mcp::McpServer>>) {
+    server.reply(id, mcp::ToolOutcome { text, is_error });
+}
+
+#[tauri::command]
 async fn get_location() -> Result<location::Position, String> {
     tauri::async_runtime::spawn_blocking(location::locate)
         .await
@@ -256,8 +304,16 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .manage(AppIndex::default())
+        .manage(claude_code::Running::default())
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // Serveur MCP local : Claude Code y trouve les outils de NozBar.
+            let emitter = handle.clone();
+            let server = mcp::McpServer::start(Box::new(move |id, name, args| {
+                let _ = emitter.emit("mcp:call", serde_json::json!({ "id": id, "name": name, "args": args }));
+            }))?;
+            app.manage(server);
 
             // L'index des applications prend 1 à 2 s : on le construit en arrière-plan.
             let indexer = handle.clone();
@@ -307,6 +363,11 @@ pub fn run() {
             check_file,
             open_file,
             get_location,
+            mcp_set_tools,
+            mcp_reply,
+            claude_code_status,
+            claude_code_send,
+            claude_code_cancel,
             open_url,
             open_settings,
             media_control,
