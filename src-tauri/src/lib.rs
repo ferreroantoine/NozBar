@@ -2,10 +2,11 @@ mod apps;
 mod files;
 mod fuzzy;
 mod location;
+mod mcp;
 mod secrets;
 mod system;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -199,6 +200,16 @@ async fn open_file(path: String, confirmed: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn mcp_set_tools(tools: Vec<serde_json::Value>, server: tauri::State<Arc<mcp::McpServer>>) {
+    server.set_tools(tools);
+}
+
+#[tauri::command]
+fn mcp_reply(id: u64, text: String, is_error: bool, server: tauri::State<Arc<mcp::McpServer>>) {
+    server.reply(id, mcp::ToolOutcome { text, is_error });
+}
+
+#[tauri::command]
 async fn get_location() -> Result<location::Position, String> {
     tauri::async_runtime::spawn_blocking(location::locate)
         .await
@@ -259,6 +270,13 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
 
+            // Serveur MCP local : Claude Code y trouve les outils de NozBar.
+            let emitter = handle.clone();
+            let server = mcp::McpServer::start(Box::new(move |id, name, args| {
+                let _ = emitter.emit("mcp:call", serde_json::json!({ "id": id, "name": name, "args": args }));
+            }))?;
+            app.manage(server);
+
             // L'index des applications prend 1 à 2 s : on le construit en arrière-plan.
             let indexer = handle.clone();
             std::thread::spawn(move || {
@@ -307,6 +325,8 @@ pub fn run() {
             check_file,
             open_file,
             get_location,
+            mcp_set_tools,
+            mcp_reply,
             open_url,
             open_settings,
             media_control,
