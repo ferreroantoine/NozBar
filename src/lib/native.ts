@@ -27,6 +27,7 @@ export interface FoundFile {
 
 export const native = {
   hideBubble: () => invoke<void>("hide_bubble"),
+  focusBubble: () => invoke<void>("focus_bubble"),
   getShortcut: () => invoke<string>("get_shortcut"),
   getApiKey: (provider: Provider) => invoke<string | null>("get_api_key", { provider }),
   setApiKey: (provider: Provider, key: string) => invoke<void>("set_api_key", { provider, key }),
