@@ -380,6 +380,12 @@ export default function App() {
       listen("ptt:end", () => void handlers.current.stopListening()),
       // Réglages modifiés dans la fenêtre de paramètres : appliqués tout de suite.
       listen<Settings>("settings:changed", ({ payload }) => settingsStore.replace(payload)),
+      listen<Provider>("keys:changed", ({ payload: provider }) => {
+        native.getApiKey(provider).then((key) => {
+          handlers.current.applyKey(provider, key);
+          if (provider === "gemini" && key) setSetup(null);
+        }, () => {});
+      }),
       // Clic dehors ou Alt+Tab : on ferme. Une appli qui s'ouvre toute seule : la bulle reprend la main.
       listen<InputState>("bubble:blur", ({ payload }) => {
         if (!openRef.current) return;

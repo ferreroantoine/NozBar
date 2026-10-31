@@ -167,12 +167,16 @@ fn get_api_key(provider: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn set_api_key(provider: String, key: String) -> Result<(), String> {
+fn set_api_key(app: AppHandle, provider: String, key: String) -> Result<(), String> {
     let key = key.trim();
     if key.is_empty() {
-        return secrets::delete(&provider);
+        secrets::delete(&provider)?;
+    } else {
+        secrets::set(&provider, key)?;
     }
-    secrets::set(&provider, key)
+    // La bulle recharge la clé, même si elle a été changée depuis la fenêtre de paramètres.
+    let _ = app.emit("keys:changed", &provider);
+    Ok(())
 }
 
 #[derive(Serialize)]

@@ -402,3 +402,134 @@ body,
     background: none;
   }
 }
+
+/* ---------- Fenêtre de paramètres ---------- */
+
+html.is-settings,
+html.is-settings body,
+html.is-settings #root {
+  background: #16161d;
+  overflow: auto;
+  user-select: text;
+}
+
+.settings-page {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 28px 28px 40px;
+  font-size: 14px;
+}
+
+.settings-page h1 {
+  margin: 0 0 22px;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.settings-section {
+  margin-bottom: 28px;
+}
+
+.settings-section h2 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.settings-intro {
+  margin: 0 0 12px;
+  color: var(--text-dim);
+}
+
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.settings-label {
+  display: flex;
+  flex: 1 1 220px;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-label span {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.settings-key,
+.settings-actions {
+  display: flex;
+  flex: 1 1 100%;
+  gap: 8px;
+}
+
+.settings-key input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font: inherit;
+}
+
+.settings-page button {
+  padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-page button.secondary {
+  border-color: var(--hairline);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.settings-page button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.segmented {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+}
+
+.settings-page .segmented button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.settings-page .segmented button.is-active {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--text);
+}
+
+.settings-note,
+.settings-warning {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.settings-warning {
+  color: #ffc46b;
+}
