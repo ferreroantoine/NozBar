@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://www.google.com https://*.gstatic.com; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 https://generativelanguage.googleapis.com wss://generativelanguage.googleapis.com; worker-src 'self' blob:; media-src 'self' blob:"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://www.google.com https://*.gstatic.com; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 https://generativelanguage.googleapis.com wss://generativelanguage.googleapis.com https://api.anthropic.com https://api.open-meteo.com https://geocoding-api.open-meteo.com; worker-src 'self' blob:; media-src 'self' blob:"
     }
   },
   "bundle": {
