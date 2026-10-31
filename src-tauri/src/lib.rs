@@ -183,9 +183,19 @@ async fn find_files(query: String, kind: Option<String>) -> Result<Vec<files::Ca
         .map_err(|e| e.to_string())
 }
 
+// Accès disque potentiellement lents (disque réveillé, antivirus) : jamais sur le fil principal.
 #[tauri::command]
-fn open_file(path: String) -> Result<(), String> {
-    files::open(&path)
+async fn check_file(path: String) -> Result<files::FileCheck, String> {
+    tauri::async_runtime::spawn_blocking(move || files::check(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn open_file(path: String, confirmed: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || files::open(&path, confirmed))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -294,6 +304,7 @@ pub fn run() {
             set_api_key,
             open_app,
             find_files,
+            check_file,
             open_file,
             get_location,
             open_url,

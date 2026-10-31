@@ -134,11 +134,69 @@ pub fn find(query: &str, kind: Kind) -> Vec<Candidate> {
     rank(&files, query, kind)
 }
 
-pub fn open(path: &str) -> Result<(), String> {
-    if !Path::new(path).is_file() {
-        return Err(format!("Fichier introuvable : {path}"));
+/// Documents et médias ouverts sans confirmation. Tout le reste (programmes, scripts,
+/// raccourcis, documents à macros, extensions inconnues) passe par une confirmation.
+const OPEN_DIRECTLY: &[&str] = &[
+    "pdf", "txt", "md", "rtf", "csv", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "epub",
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "tif", "tiff",
+    "mp3", "wav", "flac", "m4a", "ogg", "aac", "mp4", "mkv", "avi", "mov", "webm", "wmv",
+    "zip", "7z", "rar",
+];
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileCheck {
+    /// Nom réel du fichier, tel que Windows le résout.
+    pub name: String,
+    pub needs_confirmation: bool,
+    #[serde(skip)]
+    path: PathBuf,
+}
+
+/// `\\?\C:\…` → `C:\…` : ShellExecute et certains programmes refusent le préfixe étendu.
+fn plain(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    s.strip_prefix(r"\\?\").filter(|rest| !rest.starts_with("UNC")).unwrap_or(&s).to_string()
+}
+
+/// Résout le chemin réel (Windows ignore les points et espaces finaux : « outil.exe. » est « outil.exe »),
+/// vérifie qu'il est dans un dossier fouillé, et décide si l'ouverture demande une confirmation.
+pub fn resolve(path: &str, roots: &[PathBuf]) -> Result<FileCheck, String> {
+    // Avant tout accès disque : un chemin réseau enverrait les identifiants Windows au serveur.
+    if path.starts_with(r"\\") || path.starts_with("//") {
+        return Err("Les chemins réseau ne peuvent pas être ouverts".into());
     }
-    crate::system::shell_open(path)
+    let real = std::fs::canonicalize(path).map_err(|_| format!("Fichier introuvable : {path}"))?;
+    if !real.is_file() {
+        return Err(format!("Ce n'est pas un fichier : {path}"));
+    }
+    let inside = roots
+        .iter()
+        .filter_map(|r| std::fs::canonicalize(r).ok())
+        .any(|r| real.starts_with(r));
+    if !inside {
+        return Err("Seuls les fichiers de Téléchargements, Bureau et Documents peuvent être ouverts".into());
+    }
+    let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = split_ext(&name).1.to_ascii_lowercase();
+    Ok(FileCheck { name, needs_confirmation: !OPEN_DIRECTLY.contains(&ext.as_str()), path: real })
+}
+
+fn search_roots() -> Vec<PathBuf> {
+    roots().into_iter().map(|(p, _)| p).collect()
+}
+
+pub fn check(path: &str) -> Result<FileCheck, String> {
+    resolve(path, &search_roots())
+}
+
+/// `confirmed` : l'utilisateur a validé l'ouverture. La règle est revérifiée ici, pas seulement côté interface.
+pub fn open(path: &str, confirmed: bool) -> Result<(), String> {
+    let file = resolve(path, &search_roots())?;
+    if file.needs_confirmation && !confirmed {
+        return Err(format!("{} demande une confirmation avant d'être ouvert", file.name));
+    }
+    crate::system::shell_open(&plain(&file.path))
 }
 
 #[cfg(test)]
@@ -181,6 +239,38 @@ mod tests {
     fn newest_first_on_equal_score() {
         let files = vec![file("rapport.pdf", 1), file("rapport.docx", 5)];
         assert_eq!(names(&rank(&files, "rapport", Kind::Any)), ["rapport.docx", "rapport.pdf"]);
+    }
+
+    /// Dossier racine temporaire avec quelques fichiers vides.
+    fn sandbox(files: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("nozbar-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in files {
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn trailing_dot_cannot_hide_a_program() {
+        let root = sandbox(&["outil.exe", "rapport.pdf", "macro.docm", "sansext"]);
+        let at = |name: &str| root.join(name).to_string_lossy().into_owned();
+        let roots = [root.clone()];
+        assert!(resolve(&format!("{}.", at("outil.exe")), &roots).unwrap().needs_confirmation);
+        assert!(resolve(&format!("{}. .", at("outil.exe")), &roots).unwrap().needs_confirmation);
+        assert!(!resolve(&at("rapport.pdf"), &roots).unwrap().needs_confirmation);
+        // Ce qui n'est pas un document connu demande confirmation (macros, sans extension…).
+        assert!(resolve(&at("macro.docm"), &roots).unwrap().needs_confirmation);
+        assert!(resolve(&at("sansext"), &roots).unwrap().needs_confirmation);
+    }
+
+    #[test]
+    fn refuses_paths_outside_the_searched_folders() {
+        let root = sandbox(&["rapport.pdf"]);
+        let other = std::env::temp_dir();
+        assert!(resolve(&root.join("rapport.pdf").to_string_lossy(), &[other.join("ailleurs")]).is_err());
+        assert!(resolve(r"\\serveur\partage\rapport.pdf", &[root.clone()]).is_err());
+        assert!(resolve("//serveur/partage/rapport.pdf", &[root]).is_err());
     }
 
     #[test]

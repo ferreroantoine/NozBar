@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../native", () => ({
-  native: { findFiles: vi.fn(), openFile: vi.fn(async () => {}) },
+  native: { findFiles: vi.fn(), checkFile: vi.fn(), openFile: vi.fn(async () => {}) },
 }));
 
 import { native } from "../native";
-import { FILE_TOOLS, isProgram } from "./files";
+import { FILE_TOOLS } from "./files";
 import type { ToolContext } from "./types";
 
 const openFile = FILE_TOOLS.find((t) => t.name === "open_file")!;
@@ -23,40 +23,31 @@ function context(confirmed: boolean) {
 
 beforeEach(() => vi.clearAllMocks());
 
-describe("isProgram", () => {
-  it("reconnaît les programmes quelle que soit la casse", () => {
-    expect(isProgram("C:\\x\\Setup.EXE")).toBe(true);
-    expect(isProgram("raccourci.lnk")).toBe(true);
-    expect(isProgram("C:\\x\\app.appref-ms")).toBe(true);
-  });
-
-  it("laisse passer les documents", () => {
-    expect(isProgram("photo.jpg")).toBe(false);
-    expect(isProgram("C:\\x\\rapport.pdf")).toBe(false);
-    expect(isProgram("sans-extension")).toBe(false);
-  });
-});
-
 describe("open_file", () => {
-  it("demande confirmation avant de lancer un programme, et n'ouvre rien si refus", async () => {
+  it("demande confirmation quand le cœur Rust l'exige, avec le nom réel, et n'ouvre rien si refus", async () => {
+    // « Setup.exe. » : Windows l'ouvre comme Setup.exe, c'est le nom résolu qui compte.
+    vi.mocked(native.checkFile).mockResolvedValue({ name: "Setup.exe", needsConfirmation: true });
     const { ctx, confirm } = context(false);
-    const result = await openFile.run({ path: "C:\\Users\\moi\\Downloads\\Setup.exe" }, ctx);
+    const result = await openFile.run({ path: "C:\\Users\\moi\\Downloads\\Setup.exe." }, ctx);
     expect(confirm).toHaveBeenCalledWith("Lancer Setup.exe ?", "Lancer");
     expect(result.ok).toBe(false);
     expect(native.openFile).not.toHaveBeenCalled();
   });
 
-  it("lance le programme une fois confirmé", async () => {
+  it("transmet la confirmation au cœur Rust", async () => {
+    vi.mocked(native.checkFile).mockResolvedValue({ name: "Setup.exe", needsConfirmation: true });
     const { ctx } = context(true);
-    const result = await openFile.run({ path: "C:\\Users\\moi\\Downloads\\Setup.exe" }, ctx);
+    const result = await openFile.run({ path: "C:\\D\\Setup.exe" }, ctx);
     expect(result.ok).toBe(true);
-    expect(native.openFile).toHaveBeenCalledWith("C:\\Users\\moi\\Downloads\\Setup.exe");
+    expect(native.openFile).toHaveBeenCalledWith("C:\\D\\Setup.exe", true);
   });
 
   it("ouvre un document sans confirmation", async () => {
+    vi.mocked(native.checkFile).mockResolvedValue({ name: "rapport.pdf", needsConfirmation: false });
     const { ctx, confirm } = context(false);
     const result = await openFile.run({ path: "C:\\docs\\rapport.pdf" }, ctx);
     expect(confirm).not.toHaveBeenCalled();
+    expect(native.openFile).toHaveBeenCalledWith("C:\\docs\\rapport.pdf", false);
     expect(result.ok).toBe(true);
   });
 });
