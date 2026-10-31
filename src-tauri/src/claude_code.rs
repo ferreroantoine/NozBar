@@ -218,4 +218,61 @@ mod tests {
     fn kills_the_whole_process_tree() {
         assert_eq!(kill_args(42), ["/PID", "42", "/T", "/F"]);
     }
+
+    /// Bout en bout avec le vrai Claude Code (compte connecté requis, consomme un peu d'abonnement) :
+    /// `cargo test --lib real_claude_code -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn real_claude_code_uses_nozbar_tools_and_asks_permission() {
+        use crate::mcp::{McpServer, ToolOutcome};
+        use std::sync::{Arc, OnceLock};
+
+        let server_cell: Arc<OnceLock<Arc<McpServer>>> = Arc::new(OnceLock::new());
+        let calls: Arc<Mutex<Vec<String>>> = Arc::default();
+        let (cell, log) = (server_cell.clone(), calls.clone());
+        let server = McpServer::start(Box::new(move |id, name, args| {
+            log.lock().unwrap().push(format!("{name} {args}"));
+            let text = match name {
+                "get_time" => "Il est 13 h 37".to_string(),
+                // Format attendu par Claude Code pour une autorisation.
+                _ => serde_json::json!({ "behavior": "allow", "updatedInput": args["input"] }).to_string(),
+            };
+            cell.get().unwrap().reply(id, ToolOutcome { text, is_error: false });
+        }))
+        .unwrap();
+        server.set_tools(vec![serde_json::json!({
+            "name": "get_time",
+            "description": "Donne l'heure actuelle",
+            "inputSchema": { "type": "object", "properties": {} }
+        })]);
+        let _ = server_cell.set(server.clone());
+
+        let running = Running::default();
+        let probe = std::env::temp_dir().join("nozbar-probe.txt");
+        let prompt = format!(
+            "Appelle l'outil get_time. Ensuite exécute avec Bash la commande `echo nozbar-ok > \"{}\"`. \
+             Réponds en une phrase avec l'heure et si la commande a réussi.",
+            probe.display().to_string().replace('\\', "/")
+        );
+        let prompt = prompt.as_str();
+        let args = build_args("haiku", None, &server.config_json(), "Réponds en français.");
+        let mut result = String::new();
+        let started = std::time::Instant::now();
+        run(&running, prompt, args, |line| {
+            if line.contains("\"type\":\"result\"") {
+                result = line;
+            }
+        })
+        .unwrap();
+        println!("durée : {:?}", started.elapsed());
+        for c in calls.lock().unwrap().iter() {
+            println!("appel MCP : {c}");
+        }
+        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+        println!("résultat : {} | {}", result["subtype"], result["result"]);
+        println!("refus : {}", result["permission_denials"]);
+        println!("fichier écrit : {}", probe.is_file());
+        let _ = std::fs::remove_file(&probe);
+        assert!(calls.lock().unwrap().iter().any(|c| c.starts_with("get_time")));
+    }
 }
