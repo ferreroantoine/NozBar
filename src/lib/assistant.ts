@@ -3,10 +3,11 @@
 import { GoogleGenAI, type Content, type FunctionCall, type Part } from "@google/genai";
 import { DECLARATIONS, executeTool, toolStatus, type Source, type ToolContext, type Ui } from "./tools";
 
-/** Alias qui suivent les derniers modèles ; Flash-Lite sert de repli quand Flash est saturé. */
-const MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest"];
-/** Délais avant chaque nouvel essai sur un même modèle. */
-const RETRY_DELAYS_MS = [800];
+/**
+ * Alias qui suivent les derniers modèles. Flash-Lite répond en moins d'une seconde ;
+ * Flash, souvent saturé (503 après ~5 s), ne sert que de repli.
+ */
+const MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest"];
 /** Erreurs passagères côté Google : surcharge, quota par minute, panne. */
 const TRANSIENT = new Set([429, 500, 503, 504]);
 /** Délai maximal d'une tentative, streaming compris. */
@@ -43,18 +44,10 @@ function friendlyError(e: unknown): Error {
   return new Error(message);
 }
 
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
-      reject(new DOMException("Annulé", "AbortError"));
-    }, { once: true });
-  });
-}
-
 /**
- * Exécute `run` en réessayant sur les erreurs passagères, puis sur le modèle de repli.
+ * Exécute `run` sur chaque modèle à tour de rôle, jusqu'au premier succès.
+ * Sur une erreur passagère, on passe directement au modèle suivant : réessayer un modèle saturé
+ * coûtait ~5 s par essai. Le quota étant compté par modèle, un 429 se contourne aussi ainsi.
  * Chaque tentative a un délai maximal : sans lui, une requête bloquée laisserait « Réflexion… » à l'infini.
  * `canRetry` évite de rejouer une réponse déjà partiellement affichée.
  */
@@ -66,20 +59,15 @@ async function withRetry<T>(
 ): Promise<T> {
   let lastError: unknown;
   for (const model of MODELS) {
-    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-      const attemptSignal = AbortSignal.any([signal, AbortSignal.timeout(ATTEMPT_TIMEOUT_MS)]);
-      try {
-        return await run(model, attemptSignal);
-      } catch (e) {
-        if (signal.aborted) throw e;
-        const timedOut = attemptSignal.aborted;
-        lastError = timedOut ? new Error("Gemini ne répond pas. Vérifiez votre connexion, puis réessayez.") : e;
-        if (!canRetry() || !(timedOut || TRANSIENT.has(httpStatus(e) ?? 0))) throw friendlyError(lastError);
-        onRetry?.();
-        // Un modèle qui ne répond pas ne répondra pas mieux une seconde plus tard : on passe au repli.
-        if (timedOut) break;
-        if (attempt < RETRY_DELAYS_MS.length) await sleep(RETRY_DELAYS_MS[attempt], signal);
-      }
+    const attemptSignal = AbortSignal.any([signal, AbortSignal.timeout(ATTEMPT_TIMEOUT_MS)]);
+    try {
+      return await run(model, attemptSignal);
+    } catch (e) {
+      if (signal.aborted) throw e;
+      const timedOut = attemptSignal.aborted;
+      lastError = timedOut ? new Error("Gemini ne répond pas. Vérifiez votre connexion, puis réessayez.") : e;
+      if (!canRetry() || !(timedOut || TRANSIENT.has(httpStatus(e) ?? 0))) throw friendlyError(lastError);
+      onRetry?.();
     }
   }
   throw friendlyError(lastError);
