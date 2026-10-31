@@ -6,6 +6,7 @@ import { startMcpBridge } from "./lib/mcp-bridge";
 import { ClaudeProvider } from "./lib/providers/claude";
 import { ClaudeCodeProvider } from "./lib/providers/claude-code";
 import { GeminiProvider } from "./lib/providers/gemini";
+import { onFocusLost, type InputState } from "./lib/focus";
 import { native, type Provider } from "./lib/native";
 import { Pending, type PendingRequest } from "./lib/pending";
 import { Recorder, toWavBase64 } from "./lib/recorder";
@@ -20,8 +21,6 @@ import { Sources } from "./components/Sources";
 const WIDTH = 680;
 const MAX_HEIGHT = 620;
 const CLOSE_MS = 140;
-/** Après une action simple (ouvrir une app…), la bulle se referme seule. */
-const AUTO_CLOSE_MS = 1500;
 /** Un enregistrement plus court est considéré comme un appui accidentel. */
 const MIN_SPEECH_SECONDS = 0.35;
 /** Ignore la perte de focus juste après l'ouverture. */
@@ -72,7 +71,6 @@ export default function App() {
   const recorderRef = useRef<Recorder | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const closeTimer = useRef<number | undefined>(undefined);
-  const autoCloseTimer = useRef<number | undefined>(undefined);
   const openRef = useRef(false);
   const openedAt = useRef(0);
   const pending = useRef(new Pending()).current;
@@ -84,7 +82,6 @@ export default function App() {
     pending.cancel();
     abortRef.current?.abort();
     abortRef.current = null;
-    window.clearTimeout(autoCloseTimer.current);
     setBusy(false);
     setStatus("");
     setPrompt("");
@@ -161,18 +158,18 @@ export default function App() {
         live(),
       expert: (label) => live() && setExpert(label),
     };
-    const finish = (autoClose: boolean) => {
+    // La bulle reste ouverte après une action : elle ne se ferme que si l'utilisateur part (Échap, clic dehors).
+    const finish = () => {
       if (!live()) return;
       setBusy(false);
       setStatus("");
-      if (autoClose) autoCloseTimer.current = window.setTimeout(close, AUTO_CLOSE_MS);
     };
 
     try {
       const intent = matchLocal(text);
       if (intent?.kind === "reply") {
         setAnswer(intent.text);
-        finish(false);
+        finish();
         return;
       }
       if (intent?.kind === "tool") {
@@ -183,17 +180,22 @@ export default function App() {
         };
         const result = await executeTool(intent.name, intent.args, ctx);
         if (!live()) return;
+        // Annulé par l'utilisateur (Échap sur le choix) : on ne relance pas l'IA derrière son dos.
+        if (result.data?.cancelled) {
+          finish();
+          return;
+        }
         if (result.ok || !intent.fallbackToLlm || !assistantRef.current) {
           if (result.ok) setAnswer(result.message);
           else setError(result.message);
-          finish(result.ok);
+          finish();
           return;
         }
         // Ex. « ouvre les paramètres bluetooth » : pas une app, le LLM saura quel outil prendre.
         setStatus("Réflexion…");
       }
       await requireAssistant().send(text, ui, ctrl.signal);
-      finish(false);
+      finish();
     } catch (e) {
       if (!live() || isAbort(e)) return;
       setError(errorMessage(e));
@@ -353,17 +355,20 @@ export default function App() {
     // Claude Code appelle les outils NozBar par le serveur MCP : ils s'exécutent dans le tour en cours.
     const stopBridge = startMcpBridge(() => claudeCodeRef.current?.active ?? null);
 
-    const win = getCurrentWindow();
     const subscriptions = [
       listen("bubble:open", () => handlers.current.openBubble()),
       listen("bubble:close", () => handlers.current.close()),
       listen("ptt:start", () => handlers.current.startListening()),
       listen("ptt:end", () => void handlers.current.stopListening()),
-      // Clic en dehors de la bulle : on ferme, comme Spotlight.
-      win.onFocusChanged(({ payload: focused }) => {
-        if (!focused && Date.now() - openedAt.current > BLUR_GRACE_MS && !recorderRef.current) {
-          handlers.current.close();
-        }
+      // Clic dehors ou Alt+Tab : on ferme. Une appli qui s'ouvre toute seule : la bulle reprend la main.
+      listen<InputState>("bubble:blur", ({ payload }) => {
+        if (!openRef.current) return;
+        const action = onFocusLost(payload, {
+          recording: recorderRef.current !== null,
+          justOpened: Date.now() - openedAt.current < BLUR_GRACE_MS,
+        });
+        if (action === "close") handlers.current.close();
+        else if (action === "refocus") void native.focusBubble();
       }),
     ];
     const onKey = (e: KeyboardEvent) => handlers.current.onKey(e);
@@ -417,8 +422,7 @@ export default function App() {
           type={setup ? "password" : "text"}
           value={input}
           onChange={(e) => {
-            window.clearTimeout(autoCloseTimer.current);
-            setInput(e.target.value);
+                    setInput(e.target.value);
           }}
           placeholder={placeholder}
           spellCheck={false}

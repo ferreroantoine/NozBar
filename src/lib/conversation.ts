@@ -19,22 +19,6 @@ export interface ClaudeLike {
   model?: "sonnet" | "opus";
 }
 
-const NO_EXPERT =
-  "Aucun expert disponible : lancez `claude` dans un terminal pour connecter Claude Code, ou tapez /clé-claude.";
-
-/**
- * « !… », « mode expert, … », « réfléchis bien : … » envoient directement à l'expert ;
- * « !!… » et « réfléchis très bien : … » demandent en plus Opus.
- */
-const FORCE_PREFIX = /^(?:(!!)\s*|!\s*|(r[ée]fl[ée]chis tr[eè]s bien)\b[\s,:.!-]*|(?:mode expert|r[ée]fl[ée]chis bien)\b[\s,:.!-]*)/i;
-
-/** Texte nettoyé si l'utilisateur force l'expert, sinon `null`. */
-export function forcedExpert(text: string): { text: string; opus: boolean } | null {
-  const trimmed = text.trim();
-  const match = FORCE_PREFIX.exec(trimmed);
-  if (!match) return null;
-  return { text: trimmed.slice(match[0].length).trim(), opus: Boolean(match[1] || match[2]) };
-}
 
 export class Conversation {
   /** Vrai dès que Sonnet a pris la main, jusqu'au prochain reset (fermeture de la bulle). */
@@ -62,27 +46,27 @@ export class Conversation {
     return this.gemini.transcribe(wavBase64, signal);
   }
 
-  async send(raw: string, ui: Ui, signal: AbortSignal): Promise<string> {
-    const forced = forcedExpert(raw);
-    const text = forced?.text ?? raw;
+  /** C'est Gemini qui décide seul de passer la main, et à quel modèle. */
+  async send(text: string, ui: Ui, signal: AbortSignal): Promise<string> {
     const claude = this.claude();
-    if (forced?.opus && claude?.model) claude.model = "opus";
-
-    if (this.expert && claude) {
-      if (forced?.opus) ui.expert(claude.label);
-      return claude.send(text, ui, signal);
-    }
-    if (forced) return this.handOff(text, "", ui, signal);
+    if (this.expert && claude) return claude.send(text, ui, signal);
 
     const reply = await this.gemini.send(text, ui, signal, claude !== null);
-    if ("handoff" in reply) return this.handOff(text, reply.handoff, ui, signal);
-    this.log.push({ user: text, assistant: reply.answer });
-    return reply.answer;
+    if ("handoff" in reply && claude) return this.handOff(claude, text, reply.handoff, reply.model, ui, signal);
+    const answer = "answer" in reply ? reply.answer : "";
+    this.log.push({ user: text, assistant: answer });
+    return answer;
   }
 
-  private async handOff(text: string, task: string, ui: Ui, signal: AbortSignal): Promise<string> {
-    const claude = this.claude();
-    if (!claude) throw new Error(NO_EXPERT);
+  private async handOff(
+    claude: ClaudeLike,
+    text: string,
+    task: string,
+    model: "sonnet" | "opus",
+    ui: Ui,
+    signal: AbortSignal,
+  ): Promise<string> {
+    if (claude.model) claude.model = model;
     ui.expert(claude.label);
     ui.status(`Je passe la main à ${claude.label}…`);
     this.expert = true;

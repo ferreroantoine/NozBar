@@ -4,6 +4,7 @@ mod files;
 mod fuzzy;
 mod location;
 mod mcp;
+mod resolver;
 mod secrets;
 mod system;
 
@@ -144,6 +145,15 @@ fn hide_bubble(window: WebviewWindow) {
     let _ = window.hide();
 }
 
+/// Une application qui vient de s'ouvrir a pris le focus : la bulle le reprend et reste au-dessus.
+#[tauri::command]
+fn focus_bubble(window: WebviewWindow) {
+    let _ = window.set_always_on_top(true);
+    system::with_alt_held(|| {
+        let _ = window.set_focus();
+    });
+}
+
 #[tauri::command]
 fn get_shortcut(state: tauri::State<AppState>) -> String {
     state.shortcut_label.lock().unwrap().clone()
@@ -254,6 +264,22 @@ async fn get_location() -> Result<location::Position, String> {
 }
 
 #[tauri::command]
+async fn resolve_open(app: AppHandle, query: String) -> Result<resolver::Resolution, String> {
+    tauri::async_runtime::spawn_blocking(move || resolver::resolve(&query, &app.state::<AppIndex>()))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Seuls les identifiants de l'index sont acceptés : pas de `shell:` arbitraire.
+#[tauri::command]
+fn launch_app(app_id: String, index: tauri::State<AppIndex>) -> Result<(), String> {
+    if !index.contains_id(&app_id) {
+        return Err("Application inconnue".into());
+    }
+    system::shell_open(&format!("shell:AppsFolder\\{app_id}"))
+}
+
+#[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     system::open_url(&url)
 }
@@ -305,6 +331,14 @@ pub fn run() {
         .manage(AppState::default())
         .manage(AppIndex::default())
         .manage(claude_code::Running::default())
+        // L'état de la souris et du clavier se lit ici, au moment même de la perte de focus :
+        // l'interface reçoit l'événement trop tard, le bouton serait déjà relâché.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(false) = event {
+                let (mouse, keys) = system::input_state();
+                let _ = window.emit("bubble:blur", serde_json::json!({ "mouse": mouse, "keys": keys }));
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -355,10 +389,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             hide_bubble,
+            focus_bubble,
             get_shortcut,
             get_api_key,
             set_api_key,
             open_app,
+            resolve_open,
+            launch_app,
             find_files,
             check_file,
             open_file,

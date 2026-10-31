@@ -82,15 +82,18 @@ function systemPrompt(): string {
     "Pour la météo, utilise get_weather. Pour l'actualité ou tout fait récent ou incertain, utilise web_search.",
     "Pour un fichier (téléchargement, document…), utilise find_file puis open_file.",
     "Après une action, confirme en une courte phrase sans répéter les détails techniques.",
-    "Si la demande demande un raisonnement en plusieurs étapes, une explication détaillée, le fonctionnement précis " +
-      "d'un logiciel, du code ou une rédaction longue, ou si ta première tentative a échoué, appelle ask_expert " +
-      "au lieu de répondre toi-même.",
+    "Tu es l'assistant rapide : tu gères seul les questions simples et les actions directes (ouvrir, régler, météo, " +
+      "fichiers, faits courts). Pour tout le reste, appelle ask_expert sans hésiter, sans demander la permission et " +
+      "sans l'annoncer : explications détaillées, comparaisons, conseils, fonctionnement d'un logiciel (« où trouver X " +
+      "dans Photoshop »), code, rédaction (mail, résumé, texte), calculs ou raisonnements en plusieurs étapes, " +
+      "recherches à synthétiser, tâches à plusieurs actions (télécharger, organiser des fichiers), ou si tu n'es pas " +
+      "sûr de ta réponse ou que ta tentative a échoué.",
     `Date et heure actuelles : ${now}.`,
   ].join("\n");
 }
 
 /** Réponse de Gemini, ou demande de passage de main à l'expert. */
-export type GeminiReply = { answer: string } | { handoff: string };
+export type GeminiReply = { answer: string } | { handoff: string; model: "sonnet" | "opus" };
 
 export class GeminiProvider {
   private ai: GoogleGenAI;
@@ -170,8 +173,9 @@ export class GeminiProvider {
       const expert = canHandoff && calls.find((c) => c.name === "ask_expert");
       if (expert) {
         const task = typeof expert.args?.task === "string" ? expert.args.task : "";
+        const model = expert.args?.model === "opus" ? "opus" : "sonnet";
         // Le tour est oublié : sans ce résumé, l'expert referait les actions déjà faites.
-        return { handoff: done.length ? `${task}\nDéjà fait pendant ce tour :\n${done.join("\n")}` : task };
+        return { handoff: done.length ? `${task}\nDéjà fait pendant ce tour :\n${done.join("\n")}` : task, model };
       }
 
       const responses: Part[] = [];

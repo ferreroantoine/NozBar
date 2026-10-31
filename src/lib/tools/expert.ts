@@ -10,8 +10,17 @@ export const EXPERT_TOOL: Tool = {
     "du code, une rédaction longue, ou après un échec de ta part.",
   parameters: {
     type: "object",
-    properties: { task: { type: "string", description: "Ce que l'expert doit faire, reformulé clairement" } },
-    required: ["task"],
+    properties: {
+      task: { type: "string", description: "Ce que l'expert doit faire, reformulé clairement" },
+      model: {
+        type: "string",
+        enum: ["sonnet", "opus"],
+        description:
+          "sonnet pour la plupart des demandes ; opus seulement pour une tâche vraiment difficile ou longue " +
+          "(raisonnement poussé, gros code, analyse approfondie)",
+      },
+    },
+    required: ["task", "model"],
   },
   status: () => "Je passe la main à Sonnet…",
   // Atteint seulement sans clé Claude : la Conversation intercepte sinon l'appel avant exécution.

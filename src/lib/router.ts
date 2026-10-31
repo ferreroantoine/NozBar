@@ -18,7 +18,8 @@ function normalize(input: string): string {
 }
 
 const OPEN = /^(?:peux[- ]tu |tu peux )?(?:ouvre|ouvrir|lance|lancer|demarre|demarrer)\s+(?:moi\s+)?(?:l'|la |le |les |un |une )?(.+)$/;
-const DOMAIN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/\S*)?$/;
+const PLACE_HINT = /\s+(?:(?:il|elle|qui)\s+(?:est|se trouve)|(?:dans|sur)\s+(?:mes|mon|ma|le|la|les))\b/;
+const DOMAIN =/^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/\S*)?$/;
 const SETTINGS = /^(?:parametres|reglages)(?: windows)?$/;
 
 const VOLUME_SET = /^(?:mets |regle )?(?:le )?(?:volume|son)\s+(?:a\s+)?(\d{1,3})\s*%?$/;
@@ -47,7 +48,8 @@ export function matchLocal(input: string): LocalIntent | null {
 
   const open = OPEN.exec(text);
   if (open) {
-    const target = open[1];
+    // « … il est dans mes téléchargements », « … qui est sur mon bureau » : précisions de lieu, pas le nom.
+    const target = open[1].split(PLACE_HINT)[0].trim();
     if (DOMAIN.test(target)) return { kind: "tool", name: "open_url", args: { url: `https://${target}` } };
     if (SETTINGS.test(target)) return { kind: "tool", name: "open_settings", args: { page: "home" } };
     // « paramètres bluetooth » : le LLM choisira la bonne page de open_settings.

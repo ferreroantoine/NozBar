@@ -4,6 +4,19 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 
 export type Provider = "gemini" | "anthropic";
 
+export interface OpenCandidate {
+  label: string;
+  kind: "app" | "file";
+  /** Identifiant d'application ou chemin complet. */
+  target: string;
+  detail: string;
+}
+
+export type OpenResolution =
+  | { kind: "open"; candidates: OpenCandidate }
+  | { kind: "choose"; candidates: OpenCandidate[] }
+  | { kind: "nothing" };
+
 export interface FoundFile {
   name: string;
   path: string;
@@ -14,10 +27,13 @@ export interface FoundFile {
 
 export const native = {
   hideBubble: () => invoke<void>("hide_bubble"),
+  focusBubble: () => invoke<void>("focus_bubble"),
   getShortcut: () => invoke<string>("get_shortcut"),
   getApiKey: (provider: Provider) => invoke<string | null>("get_api_key", { provider }),
   setApiKey: (provider: Provider, key: string) => invoke<void>("set_api_key", { provider, key }),
   openApp: (name: string) => invoke<{ name: string }>("open_app", { name }),
+  resolveOpen: (query: string) => invoke<OpenResolution>("resolve_open", { query }),
+  launchApp: (appId: string) => invoke<void>("launch_app", { appId }),
   findFiles: (query: string, kind?: string) => invoke<FoundFile[]>("find_files", { query, kind: kind ?? null }),
   checkFile: (path: string) => invoke<{ name: string; needsConfirmation: boolean; inClaudeWorkspace: boolean }>("check_file", { path }),
   openFile: (path: string, confirmed: boolean) => invoke<void>("open_file", { path, confirmed }),

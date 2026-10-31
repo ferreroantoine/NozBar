@@ -5,9 +5,9 @@ use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    VIRTUAL_KEY, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK, VK_MEDIA_STOP,
-    VK_VOLUME_MUTE,
+    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+    VIRTUAL_KEY, VK_CONTROL, VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE,
+    VK_MEDIA_PREV_TRACK, VK_MEDIA_STOP, VK_MENU, VK_RBUTTON, VK_RWIN, VK_VOLUME_MUTE,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -63,20 +63,39 @@ pub fn open_settings(page: &str) -> Result<(), String> {
     shell_open(uri)
 }
 
-fn tap_key(vk: VIRTUAL_KEY) -> Result<(), String> {
-    let key = |flags: KEYBD_EVENT_FLAGS| INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 {
-            ki: KEYBDINPUT {
-                wVk: vk,
-                wScan: 0,
-                dwFlags: flags,
-                time: 0,
-                dwExtraInfo: 0,
+/// État de la souris et des touches de navigation, lu au moment où la bulle perd le focus.
+/// (bouton de souris enfoncé, touche Alt / Windows / Ctrl enfoncée)
+pub fn input_state() -> (bool, bool) {
+    let down = |vk: VIRTUAL_KEY| unsafe { (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0 };
+    let mouse = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].into_iter().any(down);
+    let keys = [VK_MENU, VK_LWIN, VK_RWIN, VK_CONTROL].into_iter().any(down);
+    (mouse, keys)
+}
+
+/// Windows refuse de rendre le premier plan à une fenêtre qui vient de le perdre, sauf pendant une
+/// saisie clavier : on encadre la reprise du focus par un appui sur Alt (technique classique).
+pub fn with_alt_held(f: impl FnOnce()) {
+    let _ = send_keys(&[(VK_MENU, false)]);
+    f();
+    let _ = send_keys(&[(VK_MENU, true)]);
+}
+
+fn send_keys(keys: &[(VIRTUAL_KEY, bool)]) -> Result<(), String> {
+    let inputs: Vec<INPUT> = keys
+        .iter()
+        .map(|&(vk, up)| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
             },
-        },
-    };
-    let inputs = [key(KEYBD_EVENT_FLAGS(0)), key(KEYEVENTF_KEYUP)];
+        })
+        .collect();
     let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
     if sent as usize == inputs.len() {
         Ok(())
@@ -84,6 +103,11 @@ fn tap_key(vk: VIRTUAL_KEY) -> Result<(), String> {
         Err("SendInput a échoué".into())
     }
 }
+
+fn tap_key(vk: VIRTUAL_KEY) -> Result<(), String> {
+    send_keys(&[(vk, false), (vk, true)])
+}
+
 
 pub fn media_control(action: &str) -> Result<(), String> {
     let vk = match action {

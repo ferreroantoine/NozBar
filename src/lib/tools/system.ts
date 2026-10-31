@@ -26,21 +26,6 @@ function domainOf(url: string): string {
 
 export const SYSTEM_TOOLS: Tool[] = [
   {
-    name: "open_app",
-    description: "Lance une application installée (menu Démarrer ou Microsoft Store) à partir de son nom.",
-    parameters: {
-      type: "object",
-      properties: { name: { type: "string", description: "Nom de l'application, ex. « Spotify »" } },
-      required: ["name"],
-    },
-    status: (a) => `Ouverture de ${str(a.name) || "l'application"}…`,
-    async run(a) {
-      const app = await native.openApp(str(a.name));
-      return { ok: true, message: `${app.name} est ouvert`, data: { app: app.name } };
-    },
-  },
-
-  {
     name: "open_url",
     description: "Ouvre une adresse web (https) dans le navigateur par défaut.",
     parameters: {

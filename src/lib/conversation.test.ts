@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { Conversation, forcedExpert, type ClaudeLike, type GeminiLike } from "./conversation";
+import { Conversation, type ClaudeLike, type GeminiLike } from "./conversation";
 import type { Ui } from "./tools";
 
 function makeUi() {
@@ -28,7 +28,7 @@ function fakes(geminiReplies: Awaited<ReturnType<GeminiLike["send"]>>[]) {
 
 describe("Conversation", () => {
   it("passe la main à Claude avec l'échange précédent quand Gemini le demande", async () => {
-    const { gemini, claude } = fakes([{ answer: "Salut !" }, { handoff: "expliquer les masques de fusion" }]);
+    const { gemini, claude } = fakes([{ answer: "Salut !" }, { handoff: "expliquer les masques de fusion", model: "sonnet" }]);
     const conversation = new Conversation(gemini, () => claude);
     const ui = makeUi();
     await conversation.send("Bonjour", ui, signal);
@@ -44,7 +44,7 @@ describe("Conversation", () => {
   });
 
   it("garde Claude jusqu'au reset, puis revient à Gemini", async () => {
-    const { gemini, claude } = fakes([{ handoff: "x" }, { answer: "Gemini" }]);
+    const { gemini, claude } = fakes([{ handoff: "x", model: "sonnet" }, { answer: "Gemini" }]);
     const conversation = new Conversation(gemini, () => claude);
     await conversation.send("Question difficile", makeUi(), signal);
     await conversation.send("Et ensuite ?", makeUi(), signal);
@@ -64,54 +64,29 @@ describe("Conversation", () => {
     expect(gemini.send.mock.calls[0][3]).toBe(false);
   });
 
-  it("va directement à Claude quand l'utilisateur force l'expert", async () => {
-    const { gemini, claude } = fakes([]);
+  it("un « ! » en tête de message n'a plus de sens particulier : Gemini décide", async () => {
+    const { gemini, claude } = fakes([{ answer: "Réponse rapide" }]);
     const conversation = new Conversation(gemini, () => claude);
-    await conversation.send("!explique la relativité", makeUi(), signal);
-    expect(gemini.send).not.toHaveBeenCalled();
-    expect((claude.send.mock.calls[0] as unknown as string[])[0]).toBe("explique la relativité");
+    expect(await conversation.send("!explique la relativité", makeUi(), signal)).toBe("Réponse rapide");
+    expect(claude.send).not.toHaveBeenCalled();
   });
 
-  it("refuse de forcer l'expert quand aucun n'est disponible", async () => {
-    const { gemini } = fakes([]);
-    const conversation = new Conversation(gemini, () => null);
-    await expect(conversation.send("!explique", makeUi(), signal)).rejects.toThrow("lancez `claude`");
-  });
-
-  it("passe l'expert sur Opus quand on le demande, et l'affiche", async () => {
-    const { gemini, claude } = fakes([]);
+  it("passe sur Opus quand Gemini juge la tâche difficile, et l'affiche", async () => {
+    const { gemini, claude } = fakes([{ handoff: "démontrer le théorème", model: "opus" as const }]);
     const opusCapable = { ...claude, model: "sonnet" as "sonnet" | "opus", get label(): string { return this.model === "opus" ? "Opus" : "Sonnet"; } };
     const conversation = new Conversation(gemini, () => opusCapable);
     const ui = makeUi();
-    await conversation.send("!!explique la relativité", ui, signal);
+    await conversation.send("Démontre le théorème de Fermat pour n = 4", ui, signal);
     expect(opusCapable.model).toBe("opus");
     expect(ui.expert).toHaveBeenCalledWith("Opus");
   });
 
   it("revient à Gemini si Claude échoue au moment du passage de main", async () => {
-    const { gemini, claude } = fakes([{ handoff: "x" }, { answer: "Gemini" }]);
+    const { gemini, claude } = fakes([{ handoff: "x", model: "sonnet" }, { answer: "Gemini" }]);
     claude.send.mockRejectedValueOnce(new Error("Clé Claude refusée."));
     const conversation = new Conversation(gemini, () => claude);
     await expect(conversation.send("Question difficile", makeUi(), signal)).rejects.toThrow("Clé Claude refusée.");
     expect(conversation.expert).toBe(false);
     expect(await conversation.send("Autre chose", makeUi(), signal)).toBe("Gemini");
-  });
-});
-
-describe("forcedExpert", () => {
-  it("reconnaît les préfixes et les retire", () => {
-    expect(forcedExpert("!explique")).toEqual({ text: "explique", opus: false });
-    expect(forcedExpert("mode expert, explique")).toEqual({ text: "explique", opus: false });
-    expect(forcedExpert("Réfléchis bien : comment faire ?")).toEqual({ text: "comment faire ?", opus: false });
-  });
-
-  it("demande Opus avec !! ou « réfléchis très bien »", () => {
-    expect(forcedExpert("!!explique")).toEqual({ text: "explique", opus: true });
-    expect(forcedExpert("Réfléchis très bien : comment faire ?")).toEqual({ text: "comment faire ?", opus: true });
-  });
-
-  it("laisse passer les messages normaux", () => {
-    expect(forcedExpert("ouvre spotify")).toBeNull();
-    expect(forcedExpert("le mode expert de Photoshop")).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 // Outils fichiers : retrouver un fichier par son nom approximatif, puis l'ouvrir.
 
 import { native } from "../native";
-import { str, type Tool } from "./types";
+import { str, type Tool, type ToolContext, type ToolResult } from "./types";
 
 const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
@@ -50,15 +50,16 @@ export const FILE_TOOLS: Tool[] = [
       required: ["path"],
     },
     status: (a) => `Ouverture de ${baseName(str(a.path)) || "fichier"}…`,
-    async run(a, ctx) {
-      const path = str(a.path);
-      // Le cœur Rust résout le vrai fichier et décide : l'interface ne fait que relayer la question.
-      const { name, needsConfirmation } = await native.checkFile(path);
-      if (needsConfirmation && !(await ctx.ui.confirm(`Lancer ${name} ?`, "Lancer"))) {
-        return { ok: false, message: `Lancement de ${name} annulé par l'utilisateur` };
-      }
-      await native.openFile(path, needsConfirmation);
-      return { ok: true, message: `${name} est ouvert` };
-    },
+    run: (a, ctx) => openPath(str(a.path), ctx),
   },
 ];
+
+/** Ouvre un fichier ; le cœur Rust résout le vrai fichier et décide, l'interface ne fait que relayer la question. */
+export async function openPath(path: string, ctx: ToolContext): Promise<ToolResult> {
+  const { name, needsConfirmation } = await native.checkFile(path);
+  if (needsConfirmation && !(await ctx.ui.confirm(`Lancer ${name} ?`, "Lancer"))) {
+    return { ok: false, message: `Lancement de ${name} annulé par l'utilisateur`, data: { cancelled: true } };
+  }
+  await native.openFile(path, needsConfirmation);
+  return { ok: true, message: `${name} est ouvert` };
+}
