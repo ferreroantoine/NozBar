@@ -19,7 +19,7 @@ export function Choices({ request, onAnswer }: Props) {
             className={`choice ${confirm && i === 0 ? "choice-primary" : ""}`}
             onClick={() => onAnswer(choice)}
           >
-            <kbd>{confirm ? (i === 0 ? "Entrée" : "Échap") : i + 1}</kbd>
+            <kbd>{confirm ? (i === 0 ? "Entrée" : i === request.choices.length - 1 ? "Échap" : i + 1) : i + 1}</kbd>
             {choice}
           </button>
         ))}

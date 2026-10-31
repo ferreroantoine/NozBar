@@ -13,6 +13,11 @@ export interface Ui {
   sources(list: Source[]): void;
   /** Demande une validation (Entrée / Échap) ; `action` est le libellé du bouton de validation. */
   confirm(message: string, action: string): Promise<boolean>;
+  /**
+   * Demande d'autorisation : « Autoriser » (once), « Toujours autoriser » (always) ou « Refuser » (deny).
+   * Échap ou bulle fermée valent un refus.
+   */
+  permission(message: string): Promise<"once" | "always" | "deny">;
   /** Pose une question à choix ; `null` si l'utilisateur annule. */
   ask(question: string, choices: string[], allowText: boolean): Promise<string | null>;
   /** L'expert (Claude) prend la main jusqu'à la fermeture de la bulle ; `label` s'affiche sur le badge. */

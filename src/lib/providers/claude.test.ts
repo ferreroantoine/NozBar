@@ -40,6 +40,7 @@ const ui: Ui = {
   text: vi.fn(),
   sources: vi.fn(),
   confirm: async () => true,
+  permission: async () => "once" as const,
   ask: async () => null,
   expert: vi.fn(),
 };

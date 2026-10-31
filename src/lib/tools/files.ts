@@ -1,6 +1,7 @@
 // Outils fichiers : retrouver un fichier par son nom approximatif, puis l'ouvrir.
 
 import { native } from "../native";
+import { decide } from "../settings";
 import { str, type Tool, type ToolContext, type ToolResult } from "./types";
 
 const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
@@ -57,8 +58,9 @@ export const FILE_TOOLS: Tool[] = [
 /** Ouvre un fichier ; le cœur Rust résout le vrai fichier et décide, l'interface ne fait que relayer la question. */
 export async function openPath(path: string, ctx: ToolContext): Promise<ToolResult> {
   const { name, needsConfirmation } = await native.checkFile(path);
-  if (needsConfirmation && !(await ctx.ui.confirm(`Lancer ${name} ?`, "Lancer"))) {
-    return { ok: false, message: `Lancement de ${name} annulé par l'utilisateur`, data: { cancelled: true } };
+  // Règle « Lancer des programmes » des paramètres : toujours, demander ou refuser.
+  if (needsConfirmation && !(await decide("programs", () => ctx.ui.permission(`Lancer ${name} ?`)))) {
+    return { ok: false, message: `Lancement de ${name} refusé`, data: { cancelled: true } };
   }
   await native.openFile(path, needsConfirmation);
   return { ok: true, message: `${name} est ouvert` };

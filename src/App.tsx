@@ -7,6 +7,7 @@ import { ClaudeProvider } from "./lib/providers/claude";
 import { ClaudeCodeProvider } from "./lib/providers/claude-code";
 import { GeminiProvider } from "./lib/providers/gemini";
 import { onFocusLost, type InputState } from "./lib/focus";
+import { settingsStore, type Settings } from "./lib/settings";
 import { native, type Provider } from "./lib/native";
 import { Pending, type PendingRequest } from "./lib/pending";
 import { Recorder, toWavBase64 } from "./lib/recorder";
@@ -28,6 +29,10 @@ const BLUR_GRACE_MS = 300;
 
 const KEY_COMMAND = /^\/(?:cle|clé|key)$/i;
 const CLAUDE_KEY_COMMAND = /^\/(?:cle|clé|key)[- ]?claude$/i;
+const SETTINGS_COMMAND = /^\/(?:param[eè]tres|reglages|réglages|settings)$/i;
+
+/** Réponses à une demande d'autorisation, dans l'ordre des touches (Entrée, 2, Échap). */
+const PERMISSION_CHOICES = ["Autoriser", "Toujours autoriser", "Refuser"];
 
 const KEY_PLACEHOLDER: Record<Provider, string> = {
   gemini: "Collez votre clé API Gemini, puis Entrée",
@@ -126,6 +131,12 @@ export default function App() {
   async function submit(raw: string) {
     const text = raw.trim();
     if (!text) return;
+    if (SETTINGS_COMMAND.test(text)) {
+      setInput("");
+      resetTurn();
+      void native.openPreferences();
+      return;
+    }
     const keyFor = CLAUDE_KEY_COMMAND.test(text) ? "anthropic" : KEY_COMMAND.test(text) ? "gemini" : null;
     if (keyFor) {
       setInput("");
@@ -156,6 +167,12 @@ export default function App() {
         (await pending.open({ kind: "confirm", question: message, choices: [action, "Annuler"], allowText: false })) ===
           action &&
         live(),
+      permission: async (message) => {
+        if (!live()) return "deny";
+        const choice = await pending.open({ kind: "confirm", question: message, choices: PERMISSION_CHOICES, allowText: false });
+        if (!live()) return "deny";
+        return choice === PERMISSION_CHOICES[0] ? "once" : choice === PERMISSION_CHOICES[1] ? "always" : "deny";
+      },
       expert: (label) => live() && setExpert(label),
     };
     // La bulle reste ouverte après une action : elle ne se ferme que si l'utilisateur part (Échap, clic dehors).
@@ -330,7 +347,7 @@ export default function App() {
     }
     // Sans texte libre, les touches 1-6 choisissent directement.
     const n = Number(e.key);
-    if (q?.kind === "ask" && !q.allowText && Number.isInteger(n) && n >= 1 && n <= q.choices.length) {
+    if (q && !q.allowText && Number.isInteger(n) && n >= 1 && n <= q.choices.length) {
       e.preventDefault();
       pending.answer(q.choices[n - 1]);
     }
@@ -352,6 +369,7 @@ export default function App() {
     // Sans clé Claude, NozBar fonctionne : seul le passage à l'expert est indisponible.
     native.getApiKey("anthropic").then((key) => handlers.current.applyKey("anthropic", key), () => {});
     handlers.current.refreshClaudeCode();
+    native.getSettings().then((s) => settingsStore.replace(s), () => {});
     // Claude Code appelle les outils NozBar par le serveur MCP : ils s'exécutent dans le tour en cours.
     const stopBridge = startMcpBridge(() => claudeCodeRef.current?.active ?? null);
 
@@ -360,6 +378,8 @@ export default function App() {
       listen("bubble:close", () => handlers.current.close()),
       listen("ptt:start", () => handlers.current.startListening()),
       listen("ptt:end", () => void handlers.current.stopListening()),
+      // Réglages modifiés dans la fenêtre de paramètres : appliqués tout de suite.
+      listen<Settings>("settings:changed", ({ payload }) => settingsStore.replace(payload)),
       // Clic dehors ou Alt+Tab : on ferme. Une appli qui s'ouvre toute seule : la bulle reprend la main.
       listen<InputState>("bubble:blur", ({ payload }) => {
         if (!openRef.current) return;
