@@ -5,13 +5,14 @@ import type { FunctionDeclaration } from "@google/genai";
 import { DIALOG_TOOLS } from "./dialog";
 import { EXPERT_TOOL } from "./expert";
 import { FILE_TOOLS } from "./files";
+import { OPEN_TOOL } from "./open";
 import { SYSTEM_TOOLS } from "./system";
 import { errorMessage, type Args, type Tool, type ToolContext, type ToolResult } from "./types";
 import { WEATHER_TOOL } from "./weather";
 
 export * from "./types";
 
-export const TOOLS: Tool[] = [...SYSTEM_TOOLS, ...FILE_TOOLS, WEATHER_TOOL, ...DIALOG_TOOLS, EXPERT_TOOL];
+export const TOOLS: Tool[] = [OPEN_TOOL, ...SYSTEM_TOOLS, ...FILE_TOOLS, WEATHER_TOOL, ...DIALOG_TOOLS, EXPERT_TOOL];
 
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 

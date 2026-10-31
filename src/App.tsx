@@ -183,6 +183,11 @@ export default function App() {
         };
         const result = await executeTool(intent.name, intent.args, ctx);
         if (!live()) return;
+        // Annulé par l'utilisateur (Échap sur le choix) : on ne relance pas l'IA derrière son dos.
+        if (result.data?.cancelled) {
+          finish(false);
+          return;
+        }
         if (result.ok || !intent.fallbackToLlm || !assistantRef.current) {
           if (result.ok) setAnswer(result.message);
           else setError(result.message);
