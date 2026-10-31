@@ -2,6 +2,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import type { FunctionDeclaration } from "@google/genai";
+import { DIALOG_TOOLS } from "./dialog";
 import { FILE_TOOLS } from "./files";
 import { SYSTEM_TOOLS } from "./system";
 import { errorMessage, type Args, type Tool, type ToolContext, type ToolResult } from "./types";
@@ -9,7 +10,7 @@ import { WEATHER_TOOL } from "./weather";
 
 export * from "./types";
 
-export const TOOLS: Tool[] = [...SYSTEM_TOOLS, ...FILE_TOOLS, WEATHER_TOOL];
+export const TOOLS: Tool[] = [...SYSTEM_TOOLS, ...FILE_TOOLS, WEATHER_TOOL, ...DIALOG_TOOLS];
 
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 

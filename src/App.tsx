@@ -3,9 +3,11 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { GeminiProvider as Assistant } from "./lib/providers/gemini";
 import { native } from "./lib/native";
+import { Pending, type PendingRequest } from "./lib/pending";
 import { Recorder, toWavBase64 } from "./lib/recorder";
 import { matchLocal } from "./lib/router";
 import { errorMessage, executeTool, type Source, type ToolContext, type Ui } from "./lib/tools";
+import { Choices } from "./components/Choices";
 import { Markdown } from "./components/Markdown";
 import { Orb, type OrbState } from "./components/Orb";
 import { Sources } from "./components/Sources";
@@ -44,6 +46,7 @@ export default function App() {
   const [sources, setSources] = useState<Source[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [shortcut, setShortcut] = useState("Alt+Espace");
+  const [question, setQuestion] = useState<PendingRequest | null>(null);
 
   const bubbleRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -54,10 +57,13 @@ export default function App() {
   const autoCloseTimer = useRef<number | undefined>(undefined);
   const openRef = useRef(false);
   const openedAt = useRef(0);
+  const pending = useRef(new Pending()).current;
+  pending.onChange = setQuestion;
 
   // ---------- Cycle de vie de la bulle ----------
 
   function resetTurn() {
+    pending.cancel();
     abortRef.current?.abort();
     abortRef.current = null;
     window.clearTimeout(autoCloseTimer.current);
@@ -122,8 +128,10 @@ export default function App() {
       status: (s) => live() && (setStatus(s), setBusy(true)),
       text: (d) => live() && setAnswer((a) => a + d),
       sources: (list) => live() && setSources(list),
-      // Remplacé par la confirmation dans la bulle (tâche 5) : d'ici là, on refuse par prudence.
-      confirm: async () => false,
+      ask: (q, choices, allowText) => pending.open({ kind: "ask", question: q, choices, allowText }),
+      confirm: async (message, action) =>
+        (await pending.open({ kind: "confirm", question: message, choices: [action, "Annuler"], allowText: false })) ===
+        action,
     };
     const finish = (autoClose: boolean) => {
       if (!live()) return;
@@ -249,9 +257,43 @@ export default function App() {
     }
   }
 
+  // ---------- Questions de l'IA ----------
+
+  /** Entrée dans la barre pendant une question : numéro de choix, texte libre, ou validation. */
+  function answerFromInput() {
+    const q = pending.current;
+    if (!q) return;
+    const text = input.trim();
+    if (q.kind === "confirm") {
+      if (!text) pending.answer(q.choices[0]);
+      return;
+    }
+    const n = Number(text);
+    if (Number.isInteger(n) && n >= 1 && n <= q.choices.length) pending.answer(q.choices[n - 1]);
+    else if (q.allowText && text) pending.answer(text);
+    else return;
+    setInput("");
+  }
+
+  function onKey(e: KeyboardEvent) {
+    const q = pending.current;
+    if (e.key === "Escape") {
+      // Échap annule d'abord la question en cours, puis ferme la bulle.
+      if (q) pending.cancel();
+      else close();
+      return;
+    }
+    // Sans texte libre, les touches 1-6 choisissent directement.
+    const n = Number(e.key);
+    if (q?.kind === "ask" && !q.allowText && Number.isInteger(n) && n >= 1 && n <= q.choices.length) {
+      e.preventDefault();
+      pending.answer(q.choices[n - 1]);
+    }
+  }
+
   // Les écouteurs Tauri sont branchés une seule fois : ils passent par une ref vers les handlers à jour.
-  const handlers = useRef({ openBubble, close, startListening, stopListening });
-  handlers.current = { openBubble, close, startListening, stopListening };
+  const handlers = useRef({ openBubble, close, startListening, stopListening, onKey });
+  handlers.current = { openBubble, close, startListening, stopListening, onKey };
 
   useEffect(() => {
     native.getShortcut().then((s) => s && setShortcut(s), () => {});
@@ -276,7 +318,7 @@ export default function App() {
         }
       }),
     ];
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && handlers.current.close();
+    const onKey = (e: KeyboardEvent) => handlers.current.onKey(e);
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
@@ -306,6 +348,7 @@ export default function App() {
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (setup) void saveKey(input);
+    else if (question) answerFromInput();
     else void submit(input);
   };
 
@@ -313,7 +356,7 @@ export default function App() {
   const placeholder = setup
     ? "Collez votre clé API Gemini, puis Entrée"
     : `Demandez quelque chose… ou maintenez ${shortcut} pour parler`;
-  const hasBody = Boolean(prompt || answer || status || error || sources.length);
+  const hasBody = Boolean(prompt || answer || status || error || sources.length || question);
 
   return (
     <div ref={bubbleRef} className={`bubble ${open ? "is-open" : ""}`}>
@@ -341,9 +384,10 @@ export default function App() {
           {answer && (
             <Markdown className={`answer answer-${tier(answer)}`} text={answer} onLink={openExternal} />
           )}
-          {status && (busy || listening) && (
+          {status && (busy || listening) && !question && (
             <p className={`status ${listening ? "status-listening" : ""}`}>{status}</p>
           )}
+          {question && <Choices request={question} onAnswer={(choice) => pending.answer(choice)} />}
           <Sources sources={sources} onOpen={openExternal} />
           {error && <p className="error">{error}</p>}
         </div>

@@ -13,6 +13,8 @@ export interface Ui {
   sources(list: Source[]): void;
   /** Demande une validation (Entrée / Échap) ; `action` est le libellé du bouton de validation. */
   confirm(message: string, action: string): Promise<boolean>;
+  /** Pose une question à choix ; `null` si l'utilisateur annule. */
+  ask(question: string, choices: string[], allowText: boolean): Promise<string | null>;
 }
 
 export interface ToolContext {
