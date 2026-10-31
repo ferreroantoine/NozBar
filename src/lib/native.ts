@@ -2,12 +2,22 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+export interface FoundFile {
+  name: string;
+  path: string;
+  folder: string;
+  /** Secondes depuis l'époque Unix. */
+  modified: number;
+}
+
 export const native = {
   hideBubble: () => invoke<void>("hide_bubble"),
   getShortcut: () => invoke<string>("get_shortcut"),
   getApiKey: () => invoke<string | null>("get_api_key"),
   setApiKey: (key: string) => invoke<void>("set_api_key", { key }),
   openApp: (name: string) => invoke<{ name: string }>("open_app", { name }),
+  findFiles: (query: string, kind?: string) => invoke<FoundFile[]>("find_files", { query, kind: kind ?? null }),
+  openFile: (path: string) => invoke<void>("open_file", { path }),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   openSettings: (page: string) => invoke<void>("open_settings", { page }),
   mediaControl: (action: string) => invoke<void>("media_control", { action }),

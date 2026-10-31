@@ -1,4 +1,6 @@
 mod apps;
+mod files;
+mod fuzzy;
 mod secrets;
 mod system;
 
@@ -173,6 +175,19 @@ async fn open_app(name: String, index: tauri::State<'_, AppIndex>) -> Result<Lau
 }
 
 #[tauri::command]
+async fn find_files(query: String, kind: Option<String>) -> Result<Vec<files::Candidate>, String> {
+    // Le parcours du disque peut prendre une seconde : hors du fil d'exécution des commandes.
+    tauri::async_runtime::spawn_blocking(move || files::find(&query, files::Kind::parse(kind.as_deref())))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_file(path: String) -> Result<(), String> {
+    files::open(&path)
+}
+
+#[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     system::open_url(&url)
 }
@@ -270,6 +285,8 @@ pub fn run() {
             get_api_key,
             set_api_key,
             open_app,
+            find_files,
+            open_file,
             open_url,
             open_settings,
             media_control,
