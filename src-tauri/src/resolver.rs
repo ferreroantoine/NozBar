@@ -31,6 +31,11 @@ impl Candidate {
         Candidate { label: name.into(), kind: "app", target: app_id.into(), detail: "application".into(), key: normalize(name) }
     }
 
+    /// `names` : tous les noms sous lesquels la cible peut être désignée (comparés à la demande).
+    pub fn named(label: &str, names: &str, kind: &'static str, target: &str, detail: &str) -> Candidate {
+        Candidate { label: label.into(), kind, target: target.into(), detail: detail.into(), key: normalize(names) }
+    }
+
     pub fn file(name: &str, path: &str, folder: &str) -> Candidate {
         let stem = crate::files::split_ext(name).0;
         Candidate { label: name.into(), kind: "file", target: path.into(), detail: folder.into(), key: normalize(stem) }

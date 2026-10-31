@@ -19,7 +19,9 @@ function normalize(input: string): string {
 
 const OPEN = /^(?:peux[- ]tu |tu peux )?(?:ouvre|ouvrir|lance|lancer|demarre|demarrer)\s+(?:moi\s+)?(?:l'|la |le |les |un |une )?(.+)$/;
 const PLACE_HINT = /\s+(?:(?:il|elle|qui)\s+(?:est|se trouve)|(?:dans|sur)\s+(?:mes|mon|ma|le|la|les))\b/;
-const DOMAIN =/^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/\S*)?$/;
+const CLOSE =
+  /^(?:peux[- ]tu |tu peux )?(?:ferme|fermer|quitte|quitter)\s+(?:moi\s+)?(?:l'|la |le |les )?(?:(?:fenetres?|application|appli) (?:de |d'|du )?(?:l'|la |le )?)?(.+)$/;
+const DOMAIN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/\S*)?$/;
 const SETTINGS = /^(?:parametres|reglages)(?: windows)?$/;
 
 const VOLUME_SET = /^(?:mets |regle )?(?:le )?(?:volume|son)\s+(?:a\s+)?(\d{1,3})\s*%?$/;
@@ -55,6 +57,11 @@ export function matchLocal(input: string): LocalIntent | null {
     // « paramètres bluetooth » : le LLM choisira la bonne page de open_settings.
     if (/^(?:parametres|reglages) /.test(target)) return null;
     return { kind: "tool", name: "open_app", args: { name: target }, fallbackToLlm: true };
+  }
+
+  const close = CLOSE.exec(text);
+  if (close) {
+    return { kind: "tool", name: "close_app", args: { name: close[1].split(PLACE_HINT)[0].trim() }, fallbackToLlm: true };
   }
 
   const volume = VOLUME_SET.exec(text);
