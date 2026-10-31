@@ -9,10 +9,12 @@ export interface InputState {
 }
 
 /**
- * Sans clic ni touche, la perte de focus vient d'une fenêtre qui s'est ouverte toute seule
- * (application lancée par NozBar ou par Claude) : la bulle reprend la main.
+ * Clic ou touche de navigation : l'utilisateur part, on ferme. Sinon, une fenêtre s'est ouverte toute
+ * seule : si NozBar vient de lancer quelque chose, la bulle reprend la main ; dans les autres cas
+ * (paramètres, notification…), elle reste affichée sans voler le focus.
  */
-export function onFocusLost(input: InputState, state: { recording: boolean; justOpened: boolean }) {
+export function onFocusLost(input: InputState, state: { recording: boolean; justOpened: boolean; recentLaunch: boolean }) {
   if (state.recording || state.justOpened) return "ignore";
-  return input.mouse || input.keys ? "close" : "refocus";
+  if (input.mouse || input.keys) return "close";
+  return state.recentLaunch ? "refocus" : "ignore";
 }

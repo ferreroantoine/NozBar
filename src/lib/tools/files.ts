@@ -42,6 +42,7 @@ export const FILE_TOOLS: Tool[] = [
 
   {
     name: "open_file",
+    launches: true,
     description:
       "Ouvre un fichier avec le programme par défaut de Windows. Utilise le chemin complet renvoyé par find_file. " +
       "Tout ce qui n'est pas un document ou un média (programmes, scripts…) demande une confirmation à l'utilisateur.",
@@ -57,9 +58,17 @@ export const FILE_TOOLS: Tool[] = [
 
 /** Ouvre un fichier ; le cœur Rust résout le vrai fichier et décide, l'interface ne fait que relayer la question. */
 export async function openPath(path: string, ctx: ToolContext): Promise<ToolResult> {
-  const { name, needsConfirmation } = await native.checkFile(path);
+  const { name, needsConfirmation, inClaudeWorkspace } = await native.checkFile(path);
+  // Claude qui lance un programme de son propre dossier = un script qu'il a pu écrire lui-même :
+  // la confirmation n'en montrerait que le nom. Il doit passer par une commande, affichée en entier.
+  if (needsConfirmation && inClaudeWorkspace && ctx.origin === "claude") {
+    return {
+      ok: false,
+      message: "Ce programme est dans ton dossier de travail : lance-le avec Bash pour que l'utilisateur voie la commande",
+    };
+  }
   // Règle « Lancer des programmes » des paramètres : toujours, demander ou refuser.
-  if (needsConfirmation && !(await decide("programs", () => ctx.ui.permission(`Lancer ${name} ?`)))) {
+  if (needsConfirmation && !(await decide("programs", () => ctx.ui.permission(`Lancer ${name} ?`, true)))) {
     return { ok: false, message: `Lancement de ${name} refusé`, data: { cancelled: true } };
   }
   await native.openFile(path, needsConfirmation);

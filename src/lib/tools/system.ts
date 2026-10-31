@@ -27,6 +27,7 @@ function domainOf(url: string): string {
 export const SYSTEM_TOOLS: Tool[] = [
   {
     name: "open_url",
+    launches: true,
     description: "Ouvre une adresse web (https) dans le navigateur par défaut.",
     parameters: {
       type: "object",
@@ -98,6 +99,7 @@ export const SYSTEM_TOOLS: Tool[] = [
 
   {
     name: "open_settings",
+    launches: true,
     description: "Ouvre une page des Paramètres Windows.",
     parameters: {
       type: "object",

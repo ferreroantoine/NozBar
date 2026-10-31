@@ -31,8 +31,10 @@ const KEY_COMMAND = /^\/(?:cle|clé|key)$/i;
 const CLAUDE_KEY_COMMAND = /^\/(?:cle|clé|key)[- ]?claude$/i;
 const SETTINGS_COMMAND = /^\/(?:param[eè]tres|reglages|réglages|settings)$/i;
 
-/** Réponses à une demande d'autorisation, dans l'ordre des touches (Entrée, 2, Échap). */
+/** Réponses à une demande d'autorisation (Entrée = autoriser, Échap = refuser, « Toujours » au clic seulement). */
 const PERMISSION_CHOICES = ["Autoriser", "Toujours autoriser", "Refuser"];
+/** Délai pendant lequel une perte de focus est attribuée à la fenêtre qu'un outil vient d'ouvrir. */
+const LAUNCH_REFOCUS_MS = 4000;
 
 const KEY_PLACEHOLDER: Record<Provider, string> = {
   gemini: "Collez votre clé API Gemini, puis Entrée",
@@ -78,6 +80,8 @@ export default function App() {
   const closeTimer = useRef<number | undefined>(undefined);
   const openRef = useRef(false);
   const openedAt = useRef(0);
+  /** Dernière fenêtre ouverte par un outil : la perte de focus qui suit est la sienne. */
+  const launchedAt = useRef(0);
   const pending = useRef(new Pending()).current;
   pending.onChange = setQuestion;
 
@@ -100,8 +104,8 @@ export default function App() {
     resetTurn();
     setInput("");
     setExpert(null);
-    // Connexion faite depuis le dernier lancement ? On revérifie tant que Claude Code n'est pas prêt.
-    if (!claudeCodeRef.current) refreshClaudeCode();
+    // Connexion ou déconnexion faite entre-temps (paramètres, terminal) : on revérifie à chaque ouverture.
+    refreshClaudeCode();
     assistantRef.current?.reset();
     openRef.current = true;
     openedAt.current = Date.now();
@@ -132,8 +136,8 @@ export default function App() {
     const text = raw.trim();
     if (!text) return;
     if (SETTINGS_COMMAND.test(text)) {
-      setInput("");
-      resetTurn();
+      // La bulle se ferme : toujours au premier plan, elle masquerait la fenêtre de paramètres.
+      close();
       void native.openPreferences();
       return;
     }
@@ -167,11 +171,15 @@ export default function App() {
         (await pending.open({ kind: "confirm", question: message, choices: [action, "Annuler"], allowText: false })) ===
           action &&
         live(),
-      permission: async (message) => {
+      permission: async (message, remember) => {
         if (!live()) return "deny";
-        const choice = await pending.open({ kind: "confirm", question: message, choices: PERMISSION_CHOICES, allowText: false });
+        const choices = remember ? PERMISSION_CHOICES : [PERMISSION_CHOICES[0], PERMISSION_CHOICES[2]];
+        const choice = await pending.open({ kind: "confirm", question: message, choices, allowText: false });
         if (!live()) return "deny";
         return choice === PERMISSION_CHOICES[0] ? "once" : choice === PERMISSION_CHOICES[1] ? "always" : "deny";
+      },
+      launched: () => {
+        launchedAt.current = Date.now();
       },
       expert: (label) => live() && setExpert(label),
     };
@@ -347,7 +355,8 @@ export default function App() {
     }
     // Sans texte libre, les touches 1-6 choisissent directement.
     const n = Number(e.key);
-    if (q && !q.allowText && Number.isInteger(n) && n >= 1 && n <= q.choices.length) {
+    // Pas de raccourci chiffré sur une autorisation : un chiffre tapé au mauvais moment accorderait « Toujours ».
+    if (q?.kind === "ask" && !q.allowText && Number.isInteger(n) && n >= 1 && n <= q.choices.length) {
       e.preventDefault();
       pending.answer(q.choices[n - 1]);
     }
@@ -392,9 +401,14 @@ export default function App() {
         const action = onFocusLost(payload, {
           recording: recorderRef.current !== null,
           justOpened: Date.now() - openedAt.current < BLUR_GRACE_MS,
+          recentLaunch: Date.now() - launchedAt.current < LAUNCH_REFOCUS_MS,
         });
         if (action === "close") handlers.current.close();
-        else if (action === "refocus") void native.focusBubble();
+        else if (action === "refocus") {
+          // Une seule reprise par lancement : pas de ping-pong avec une appli qui reprend le focus.
+          launchedAt.current = 0;
+          void native.focusBubble();
+        }
       }),
     ];
     const onKey = (e: KeyboardEvent) => handlers.current.onKey(e);

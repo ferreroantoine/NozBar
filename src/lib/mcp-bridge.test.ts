@@ -15,7 +15,7 @@ import { executeTool, type Ui } from "./tools";
 /** Tour actif dont l'utilisateur répond `answer` aux demandes d'autorisation. */
 function turn(answer: boolean | "always") {
   const reply = answer === "always" ? "always" : answer ? "once" : "deny";
-  const confirm = vi.fn(async (_message: string) => reply as "once" | "always" | "deny");
+  const confirm = vi.fn(async (_message: string, _remember: boolean) => reply as "once" | "always" | "deny");
   const ui = {
     status: vi.fn(),
     text: vi.fn(),
@@ -43,7 +43,7 @@ describe("handleMcpCall", () => {
   it("demande l'autorisation dans la bulle et la transmet à Claude Code", async () => {
     const { active, confirm } = turn(true);
     const out = await handleMcpCall({ id: 1, name: "approve", args: BASH }, active);
-    expect(confirm).toHaveBeenCalledWith("Claude veut exécuter : echo ok > C:/tmp/x.txt");
+    expect(confirm).toHaveBeenCalledWith("Claude veut exécuter : echo ok > C:/tmp/x.txt", true);
     expect(out.isError).toBe(false);
     expect(JSON.parse(out.text)).toEqual({ behavior: "allow", updatedInput: BASH.input });
   });
@@ -105,12 +105,32 @@ describe("handleMcpCall — règles des paramètres", () => {
   });
 });
 
+describe("handleMcpCall — outils sans catégorie", () => {
+  it("ne propose pas « Toujours autoriser » pour un outil sans réglage", async () => {
+    const { active, confirm } = turn(true);
+    await handleMcpCall({ id: 30, name: "approve", args: { tool_name: "Task", input: {} } }, active, store());
+    expect(confirm).toHaveBeenCalledWith("Claude veut utiliser Task", false);
+  });
+
+  it("propose « Toujours autoriser » pour une catégorie connue", async () => {
+    const { active, confirm } = turn(true);
+    await handleMcpCall({ id: 31, name: "approve", args: BASH }, active, store());
+    expect(confirm).toHaveBeenCalledWith("Claude veut exécuter : echo ok > C:/tmp/x.txt", true);
+  });
+
+  it("marque les outils exécutés pour Claude", async () => {
+    const { active } = turn(true);
+    await handleMcpCall({ id: 32, name: "get_weather", args: {} }, active, store());
+    expect(executeTool).toHaveBeenCalledWith("get_weather", {}, expect.objectContaining({ origin: "claude" }));
+  });
+});
+
 describe("handleMcpCall — garde-fous", () => {
   it("montre la commande en entier, et refuse une commande trop longue pour être relue", async () => {
     const { active, confirm } = turn(true);
     const long = `echo ${"a".repeat(300)} && del important.txt`;
     await handleMcpCall({ id: 7, name: "approve", args: { tool_name: "Bash", input: { command: long } } }, active);
-    expect(confirm).toHaveBeenCalledWith(`Claude veut exécuter : ${long}`);
+    expect(confirm).toHaveBeenCalledWith(`Claude veut exécuter : ${long}`, true);
 
     const huge = "x".repeat(3000);
     const out = await handleMcpCall({ id: 8, name: "approve", args: { tool_name: "Bash", input: { command: huge } } }, active);

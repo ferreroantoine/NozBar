@@ -151,9 +151,10 @@ fn hide_bubble(window: WebviewWindow) {
 #[tauri::command]
 fn focus_bubble(window: WebviewWindow) {
     let _ = window.set_always_on_top(true);
-    system::with_alt_held(|| {
-        let _ = window.set_focus();
-    });
+    if let Ok(handle) = window.hwnd() {
+        system::bring_to_front(handle.0 as isize);
+    }
+    let _ = window.set_focus();
 }
 
 #[tauri::command]

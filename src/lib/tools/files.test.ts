@@ -30,7 +30,7 @@ describe("open_file", () => {
     vi.mocked(native.checkFile).mockResolvedValue({ name: "Setup.exe", needsConfirmation: true, inClaudeWorkspace: false });
     const { ctx, confirm } = context(false);
     const result = await openFile.run({ path: "C:\\Users\\moi\\Downloads\\Setup.exe." }, ctx);
-    expect(confirm).toHaveBeenCalledWith("Lancer Setup.exe ?");
+    expect(confirm).toHaveBeenCalledWith("Lancer Setup.exe ?", true);
     expect(result.ok).toBe(false);
     expect(native.openFile).not.toHaveBeenCalled();
   });
@@ -52,6 +52,17 @@ describe("open_file", () => {
     const result = await openFile.run({ path: "C:\\D\\Setup.exe" }, ctx);
     expect(confirm).not.toHaveBeenCalled();
     expect(result.ok).toBe(false);
+    expect(native.openFile).not.toHaveBeenCalled();
+    await settingsStore.setPolicy("programs", "ask");
+  });
+
+  it("refuse à Claude un programme de son propre dossier, quelle que soit la règle", async () => {
+    vi.mocked(native.checkFile).mockResolvedValue({ name: "maj.bat", needsConfirmation: true, inClaudeWorkspace: true });
+    await settingsStore.setPolicy("programs", "always");
+    const { ctx, confirm } = context(true);
+    const result = await openFile.run({ path: "C:\\Users\\moi\\Documents\\NozBar\\maj.bat" }, { ...ctx, origin: "claude" });
+    expect(result.ok).toBe(false);
+    expect(confirm).not.toHaveBeenCalled();
     expect(native.openFile).not.toHaveBeenCalled();
     await settingsStore.setPolicy("programs", "ask");
   });

@@ -40,7 +40,7 @@ describe("open_app", () => {
     const { ctx } = context();
     const confirm = vi.spyOn(ctx.ui, "permission");
     await OPEN_TOOL.run({ name: "horizon launcher" }, ctx);
-    expect(confirm).toHaveBeenCalledWith("Lancer horizon-launcher.exe ?");
+    expect(confirm).toHaveBeenCalledWith("Lancer horizon-launcher.exe ?", true);
     expect(native.openFile).toHaveBeenCalledWith(launcher.target, true);
     expect(native.launchApp).not.toHaveBeenCalled();
   });

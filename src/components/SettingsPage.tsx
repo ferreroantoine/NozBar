@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 import { native, type Provider } from "../lib/native";
 import { CATEGORIES, DEFAULT_SETTINGS, type Category, type Policy, type Settings } from "../lib/settings";
@@ -142,6 +143,9 @@ function PermissionsSection() {
 
   useEffect(() => {
     native.getSettings().then(setSettings, (e) => setNote(errorMessage(e)));
+    // « Toujours autoriser » cliqué dans la bulle pendant que la fenêtre est ouverte.
+    const unlisten = listen<Settings>("settings:changed", ({ payload }) => setSettings(payload));
+    return () => void unlisten.then((stop) => stop());
   }, []);
 
   async function change(key: Category, policy: Policy) {

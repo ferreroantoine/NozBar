@@ -64,7 +64,7 @@ pub fn allowed_tools(p: &Permissions) -> String {
         (p.web_search, &["WebSearch"]),
         (p.web_fetch, &["WebFetch"]),
         (p.read_outside, &["Read", "Glob", "Grep"]),
-        (p.write_outside, &["Write", "Edit", "NotebookEdit"]),
+        (p.write_outside, &["Write", "Edit", "MultiEdit", "NotebookEdit"]),
         (p.commands, &["Bash", "PowerShell"]),
     ];
     groups

@@ -62,10 +62,12 @@ export async function handleMcpCall(
     // Sans tour en cours (bulle fermée), personne ne peut répondre : on refuse.
     if (!active || active.signal.aborted) return deny("Aucune conversation en cours");
     const tooLong = str(input.command).length > MAX_COMMAND_CHARS;
+    const category = categoryOf(tool);
     const allowed = await decide(
-      categoryOf(tool),
+      category,
       // Une commande qu'on ne peut pas relire n'est pas proposée : c'est un refus.
-      async () => (tooLong ? "deny" : active.ui.permission(describeRequest(tool, input))),
+      // « Toujours autoriser » n'est proposé que si une catégorie peut le retenir.
+      async () => (tooLong ? "deny" : active.ui.permission(describeRequest(tool, input), category !== null)),
       store,
     );
     if (!allowed) {
@@ -96,6 +98,7 @@ export async function handleMcpCall(
   const ctx: ToolContext = {
     ui: active.ui,
     signal: active.signal,
+    origin: "claude",
     search: () => Promise.reject(new Error("Recherche indisponible")),
   };
   try {

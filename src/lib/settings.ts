@@ -35,6 +35,7 @@ const TOOL_CATEGORY: Record<string, Category> = {
   PowerShell: "commands",
   Write: "write_outside",
   Edit: "write_outside",
+  MultiEdit: "write_outside",
   NotebookEdit: "write_outside",
   Read: "read_outside",
   Glob: "read_outside",

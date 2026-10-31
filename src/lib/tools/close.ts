@@ -28,6 +28,11 @@ export const CLOSE_TOOL: Tool = {
       target = found.candidates[labels.indexOf(pick)] ?? null;
       if (!target) return { ok: false, message: `Aucune des propositions ne correspond à « ${name} »` };
     }
+    // Fermer peut faire perdre un travail en cours (console, terminal) : Claude demande d'abord.
+    if (ctx.origin === "claude") {
+      const answer = await ctx.ui.permission(`Claude veut fermer ${target!.label} (${target!.detail})`, false);
+      if (answer === "deny") return { ok: false, message: "Fermeture refusée par l'utilisateur" };
+    }
     await native.closeApp(target!.target);
     return { ok: true, message: `${target!.label} est fermé` };
   },
