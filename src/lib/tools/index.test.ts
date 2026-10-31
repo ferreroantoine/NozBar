@@ -1,5 +1,18 @@
-import { describe, expect, it } from "vitest";
-import { claudeTools, geminiDeclarations, TOOLS } from "./index";
+import { describe, expect, it, vi } from "vitest";
+import { claudeTools, executeTool, geminiDeclarations, TOOLS, type ToolContext } from "./index";
+
+describe("executeTool", () => {
+  it("n'exécute pas un outil dont le tour a été annulé pendant l'attente d'affichage", async () => {
+    vi.stubGlobal("requestAnimationFrame", (cb: () => void) => setTimeout(cb, 0));
+    const tool = TOOLS.find((t) => t.name === "set_timer")!;
+    const run = vi.spyOn(tool, "run");
+    const ctrl = new AbortController();
+    const ctx = { ui: { status: () => ctrl.abort() }, signal: ctrl.signal } as unknown as ToolContext;
+    await expect(executeTool("set_timer", { seconds: 5 }, ctx)).rejects.toThrow("Annulé");
+    expect(run).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
 
 describe("catalogue d'outils", () => {
   it("décrit les outils pour Gemini en JSON Schema", () => {

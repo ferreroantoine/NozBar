@@ -7,6 +7,7 @@ import { GeminiProvider } from "./lib/providers/gemini";
 import { native, type Provider } from "./lib/native";
 import { Pending, type PendingRequest } from "./lib/pending";
 import { Recorder, toWavBase64 } from "./lib/recorder";
+import { setupAfterClose } from "./lib/setup";
 import { matchLocal } from "./lib/router";
 import { errorMessage, executeTool, type Source, type ToolContext, type Ui } from "./lib/tools";
 import { Choices } from "./components/Choices";
@@ -108,6 +109,7 @@ export default function App() {
     recorderRef.current = null;
     setListening(false);
     setLevel(0);
+    setSetup((s) => setupAfterClose(s, assistantRef.current !== null));
     resetTurn();
     closeTimer.current = window.setTimeout(() => void native.hideBubble(), CLOSE_MS);
   }
@@ -143,10 +145,14 @@ export default function App() {
       status: (s) => live() && (setStatus(s), setBusy(true)),
       text: (d) => live() && setAnswer((a) => a + d),
       sources: (list) => live() && setSources(list),
-      ask: (q, choices, allowText) => pending.open({ kind: "ask", question: q, choices, allowText }),
+      // Une question d'un tour annulé ne doit jamais apparaître dans une bulle rouverte.
+      ask: async (q, choices, allowText) =>
+        live() ? pending.open({ kind: "ask", question: q, choices, allowText }) : null,
       confirm: async (message, action) =>
+        live() &&
         (await pending.open({ kind: "confirm", question: message, choices: [action, "Annuler"], allowText: false })) ===
-        action,
+          action &&
+        live(),
       expert: () => live() && setExpert(true),
     };
     const finish = (autoClose: boolean) => {

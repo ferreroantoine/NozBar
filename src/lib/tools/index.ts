@@ -52,6 +52,8 @@ export async function executeTool(name: string, args: Args, ctx: ToolContext): P
   const shownAt = performance.now();
   ctx.ui.status(tool.status(args));
   await nextPaint();
+  // Bulle fermée ou nouveau message pendant l'attente : l'action ne doit plus avoir lieu.
+  if (ctx.signal.aborted) throw new DOMException("Annulé", "AbortError");
 
   let result: ToolResult;
   try {

@@ -46,6 +46,18 @@ describe("GeminiProvider", () => {
     expect(executeTool).not.toHaveBeenCalled();
   });
 
+  it("transmet à l'expert les actions déjà faites pendant le tour", async () => {
+    const { ai } = fakeAi([
+      [{ functionCall: { name: "set_timer", args: { seconds: 300 } } }],
+      [{ functionCall: { name: "ask_expert", args: { task: "expliquer X" } } }],
+    ]);
+    const reply = await new GeminiProvider("clé", ai).send("Minuteur 5 min et explique X", ui, signal, true);
+    expect(reply).toEqual({ handoff: expect.stringContaining("expliquer X") });
+    const handoff = (reply as { handoff: string }).handoff;
+    expect(handoff).toContain('set_timer {"seconds":300}');
+    expect(handoff).toContain("fait");
+  });
+
   it("répond lui-même quand le passage de main est impossible", async () => {
     const { ai, generateContentStream } = fakeAi([
       [{ functionCall: { name: "ask_expert", args: { task: "expliquer X" } } }],

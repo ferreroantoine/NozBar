@@ -95,7 +95,22 @@ export class ClaudeProvider {
 
       if (message.stop_reason === "refusal") throw new Error("Claude a refusé cette demande.");
       if (message.stop_reason === "pause_turn") continue;
-      if (message.stop_reason !== "tool_use") return answer;
+      if (message.stop_reason !== "tool_use") {
+        // Réponse coupée (max_tokens…) au milieu d'un appel : sans tool_result, l'API refuserait la suite.
+        const dangling = message.content.filter((b) => b.type === "tool_use");
+        if (dangling.length) {
+          this.history.push({
+            role: "user",
+            content: dangling.map((b) => ({
+              type: "tool_result" as const,
+              tool_use_id: b.id,
+              content: "Réponse interrompue avant l'exécution",
+              is_error: true,
+            })),
+          });
+        }
+        return answer;
+      }
 
       const results: Anthropic.Beta.BetaToolResultBlockParam[] = [];
       for (const block of message.content) {

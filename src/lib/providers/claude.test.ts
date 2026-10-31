@@ -80,6 +80,27 @@ describe("ClaudeProvider", () => {
     ]);
   });
 
+  it("répare l'historique quand une réponse est coupée au milieu d'un appel d'outil", async () => {
+    const { client, stream } = fakeClient([
+      {
+        content: [
+          { type: "text", text: "Je regarde" },
+          { type: "tool_use", id: "t9", name: "find_file", input: {} },
+        ],
+        stop_reason: "max_tokens",
+      },
+      { content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" },
+    ]);
+    const claude = new ClaudeProvider("clé", client);
+    expect(await claude.send("Cherche", ui, signal)).toBe("Je regarde");
+    expect(executeTool).not.toHaveBeenCalled();
+    await claude.send("Et alors ?", ui, signal);
+    const messages = body(stream, 1).messages;
+    const repaired = messages[2].content as unknown as Block[];
+    expect(repaired).toEqual([expect.objectContaining({ type: "tool_result", tool_use_id: "t9", is_error: true })]);
+    expect(messages.at(-1)).toEqual({ role: "user", content: "Et alors ?" });
+  });
+
   it("signale un refus", async () => {
     const { client } = fakeClient([{ content: [], stop_reason: "refusal" }]);
     await expect(new ClaudeProvider("clé", client).send("…", ui, signal)).rejects.toThrow("Claude a refusé cette demande.");

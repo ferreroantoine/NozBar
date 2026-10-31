@@ -126,6 +126,8 @@ export class GeminiProvider {
     const ctx: ToolContext = { ui, signal, search: (q) => this.search(q, signal) };
     this.history.push({ role: "user", parts: [{ text }] });
     let answer = "";
+    /** Outils exécutés pendant ce tour, résumés pour l'expert en cas de passage de main. */
+    const done: string[] = [];
 
     for (let step = 0; step < MAX_STEPS; step++) {
       // On conserve les parts telles quelles : Gemini exige les signatures de pensée au tour suivant.
@@ -166,12 +168,17 @@ export class GeminiProvider {
 
       // Le passage de main l'emporte : les autres appels du même message sont laissés à l'expert.
       const expert = canHandoff && calls.find((c) => c.name === "ask_expert");
-      if (expert) return { handoff: typeof expert.args?.task === "string" ? expert.args.task : "" };
+      if (expert) {
+        const task = typeof expert.args?.task === "string" ? expert.args.task : "";
+        // Le tour est oublié : sans ce résumé, l'expert referait les actions déjà faites.
+        return { handoff: done.length ? `${task}\nDéjà fait pendant ce tour :\n${done.join("\n")}` : task };
+      }
 
       const responses: Part[] = [];
       for (const call of calls) {
         const result = await executeTool(call.name!, call.args ?? {}, ctx);
         if (signal.aborted) throw new DOMException("Annulé", "AbortError");
+        done.push(`- ${call.name} ${JSON.stringify(call.args ?? {})} → ${result.ok ? "" : "échec : "}${result.message}`);
         responses.push({
           functionResponse: {
             id: call.id,
