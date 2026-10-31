@@ -1,6 +1,7 @@
 mod apps;
 mod files;
 mod fuzzy;
+mod location;
 mod secrets;
 mod system;
 
@@ -188,6 +189,13 @@ fn open_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn get_location() -> Result<location::Position, String> {
+    tauri::async_runtime::spawn_blocking(location::locate)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     system::open_url(&url)
 }
@@ -287,6 +295,7 @@ pub fn run() {
             open_app,
             find_files,
             open_file,
+            get_location,
             open_url,
             open_settings,
             media_control,

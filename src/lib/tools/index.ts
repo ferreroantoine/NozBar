@@ -5,10 +5,11 @@ import type { FunctionDeclaration } from "@google/genai";
 import { FILE_TOOLS } from "./files";
 import { SYSTEM_TOOLS } from "./system";
 import { errorMessage, type Args, type Tool, type ToolContext, type ToolResult } from "./types";
+import { WEATHER_TOOL } from "./weather";
 
 export * from "./types";
 
-export const TOOLS: Tool[] = [...SYSTEM_TOOLS, ...FILE_TOOLS];
+export const TOOLS: Tool[] = [...SYSTEM_TOOLS, ...FILE_TOOLS, WEATHER_TOOL];
 
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 

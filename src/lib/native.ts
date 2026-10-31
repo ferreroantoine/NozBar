@@ -19,6 +19,7 @@ export const native = {
   findFiles: (query: string, kind?: string) => invoke<FoundFile[]>("find_files", { query, kind: kind ?? null }),
   openFile: (path: string) => invoke<void>("open_file", { path }),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
+  getLocation: () => invoke<{ lat: number; lon: number }>("get_location"),
   openSettings: (page: string) => invoke<void>("open_settings", { page }),
   mediaControl: (action: string) => invoke<void>("media_control", { action }),
   setVolume: (level?: number, delta?: number) =>
