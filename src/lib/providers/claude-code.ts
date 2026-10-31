@@ -31,6 +31,10 @@ export class ClaudeCodeProvider {
   active: { ui: Ui; signal: AbortSignal } | null = null;
   private sessionId: string | null = null;
 
+  get label() {
+    return this.model === "opus" ? "Opus" : "Sonnet";
+  }
+
   constructor(
     private run: RunClaudeCode = native.claudeCodeSend,
     private cancel: () => unknown = native.claudeCodeCancel,

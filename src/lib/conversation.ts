@@ -13,17 +13,27 @@ export interface GeminiLike {
 export interface ClaudeLike {
   send(text: string, ui: Ui, signal: AbortSignal, context?: string): Promise<string>;
   reset(): void;
+  /** Nom affiché sur le badge (« Sonnet », « Opus »). */
+  readonly label: string;
+  /** Présent si l'expert sait passer sur Opus (Claude Code). */
+  model?: "sonnet" | "opus";
 }
 
-const NO_CLAUDE_KEY = "Aucune clé Claude enregistrée. Tapez /clé-claude pour l'ajouter.";
+const NO_EXPERT =
+  "Aucun expert disponible : lancez `claude` dans un terminal pour connecter Claude Code, ou tapez /clé-claude.";
 
-/** « !… », « mode expert, … », « réfléchis bien : … » envoient directement à l'expert. */
-const FORCE_PREFIX = /^(?:!\s*|(?:mode expert|r[ée]fl[ée]chis bien)\b[\s,:.!-]*)/i;
+/**
+ * « !… », « mode expert, … », « réfléchis bien : … » envoient directement à l'expert ;
+ * « !!… » et « réfléchis très bien : … » demandent en plus Opus.
+ */
+const FORCE_PREFIX = /^(?:(!!)\s*|!\s*|(r[ée]fl[ée]chis tr[eè]s bien)\b[\s,:.!-]*|(?:mode expert|r[ée]fl[ée]chis bien)\b[\s,:.!-]*)/i;
 
 /** Texte nettoyé si l'utilisateur force l'expert, sinon `null`. */
-export function forcedExpert(text: string): string | null {
-  const match = FORCE_PREFIX.exec(text.trim());
-  return match ? text.trim().slice(match[0].length).trim() : null;
+export function forcedExpert(text: string): { text: string; opus: boolean } | null {
+  const trimmed = text.trim();
+  const match = FORCE_PREFIX.exec(trimmed);
+  if (!match) return null;
+  return { text: trimmed.slice(match[0].length).trim(), opus: Boolean(match[1] || match[2]) };
 }
 
 export class Conversation {
@@ -54,11 +64,15 @@ export class Conversation {
 
   async send(raw: string, ui: Ui, signal: AbortSignal): Promise<string> {
     const forced = forcedExpert(raw);
-    const text = forced ?? raw;
+    const text = forced?.text ?? raw;
     const claude = this.claude();
+    if (forced?.opus && claude?.model) claude.model = "opus";
 
-    if (this.expert && claude) return claude.send(text, ui, signal);
-    if (forced !== null) return this.handOff(text, "", ui, signal);
+    if (this.expert && claude) {
+      if (forced?.opus) ui.expert(claude.label);
+      return claude.send(text, ui, signal);
+    }
+    if (forced) return this.handOff(text, "", ui, signal);
 
     const reply = await this.gemini.send(text, ui, signal, claude !== null);
     if ("handoff" in reply) return this.handOff(text, reply.handoff, ui, signal);
@@ -68,9 +82,9 @@ export class Conversation {
 
   private async handOff(text: string, task: string, ui: Ui, signal: AbortSignal): Promise<string> {
     const claude = this.claude();
-    if (!claude) throw new Error(NO_CLAUDE_KEY);
-    ui.expert();
-    ui.status("Je passe la main à Sonnet…");
+    if (!claude) throw new Error(NO_EXPERT);
+    ui.expert(claude.label);
+    ui.status(`Je passe la main à ${claude.label}…`);
     this.expert = true;
     const request = task && task !== text ? `${text}\n\n(Tâche transmise par l'assistant rapide : ${task})` : text;
     const context = this.log.map((e) => `Utilisateur : ${e.user}\nAssistant : ${e.assistant}`).join("\n");

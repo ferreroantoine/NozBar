@@ -35,6 +35,7 @@ function friendlyError(e: unknown): Error {
 export class ClaudeProvider {
   private client: Anthropic;
   private history: Anthropic.Beta.BetaMessageParam[] = [];
+  readonly label = "Sonnet";
 
   constructor(apiKey: string, client?: Anthropic) {
     // App de bureau locale : la clé vient du Gestionnaire d'identification, il n'y a pas de serveur où la cacher.

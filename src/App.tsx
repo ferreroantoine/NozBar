@@ -2,7 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "re
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Conversation } from "./lib/conversation";
+import { startMcpBridge } from "./lib/mcp-bridge";
 import { ClaudeProvider } from "./lib/providers/claude";
+import { ClaudeCodeProvider } from "./lib/providers/claude-code";
 import { GeminiProvider } from "./lib/providers/gemini";
 import { native, type Provider } from "./lib/native";
 import { Pending, type PendingRequest } from "./lib/pending";
@@ -58,13 +60,15 @@ export default function App() {
   const [shortcut, setShortcut] = useState("Alt+Espace");
   const [question, setQuestion] = useState<PendingRequest | null>(null);
   /** Claude Sonnet a pris la main pour cette bulle. */
-  const [expert, setExpert] = useState(false);
+  const [expert, setExpert] = useState<string | null>(null);
 
   const bubbleRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const assistantRef = useRef<Conversation | null>(null);
   /** Expert optionnel : sans clé Claude, la Conversation reste sur Gemini. */
   const claudeRef = useRef<ClaudeProvider | null>(null);
+  /** Claude Code connecté à l'abonnement : prioritaire sur l'API. */
+  const claudeCodeRef = useRef<ClaudeCodeProvider | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const closeTimer = useRef<number | undefined>(undefined);
@@ -93,7 +97,9 @@ export default function App() {
     window.clearTimeout(closeTimer.current);
     resetTurn();
     setInput("");
-    setExpert(false);
+    setExpert(null);
+    // Connexion faite depuis le dernier lancement ? On revérifie tant que Claude Code n'est pas prêt.
+    if (!claudeCodeRef.current) refreshClaudeCode();
     assistantRef.current?.reset();
     openRef.current = true;
     openedAt.current = Date.now();
@@ -153,7 +159,7 @@ export default function App() {
         (await pending.open({ kind: "confirm", question: message, choices: [action, "Annuler"], allowText: false })) ===
           action &&
         live(),
-      expert: () => live() && setExpert(true),
+      expert: (label) => live() && setExpert(label),
     };
     const finish = (autoClose: boolean) => {
       if (!live()) return;
@@ -205,10 +211,22 @@ export default function App() {
 
   function applyKey(provider: Provider, key: string | null) {
     if (provider === "gemini") {
-      assistantRef.current = key ? new Conversation(new GeminiProvider(key), () => claudeRef.current) : null;
+      assistantRef.current = key
+        ? new Conversation(new GeminiProvider(key), () => claudeCodeRef.current ?? claudeRef.current)
+        : null;
     } else {
       claudeRef.current = key ? new ClaudeProvider(key) : null;
     }
+  }
+
+  function refreshClaudeCode() {
+    native.claudeCodeStatus().then(
+      ({ installed, loggedIn }) => {
+        if (installed && loggedIn) claudeCodeRef.current ??= new ClaudeCodeProvider();
+        else claudeCodeRef.current = null;
+      },
+      () => {},
+    );
   }
 
   async function saveKey(provider: Provider, raw: string) {
@@ -317,8 +335,8 @@ export default function App() {
   }
 
   // Les écouteurs Tauri sont branchés une seule fois : ils passent par une ref vers les handlers à jour.
-  const handlers = useRef({ openBubble, close, startListening, stopListening, onKey, applyKey });
-  handlers.current = { openBubble, close, startListening, stopListening, onKey, applyKey };
+  const handlers = useRef({ openBubble, close, startListening, stopListening, onKey, applyKey, refreshClaudeCode });
+  handlers.current = { openBubble, close, startListening, stopListening, onKey, applyKey, refreshClaudeCode };
 
   useEffect(() => {
     native.getShortcut().then((s) => s && setShortcut(s), () => {});
@@ -331,6 +349,9 @@ export default function App() {
     );
     // Sans clé Claude, NozBar fonctionne : seul le passage à l'expert est indisponible.
     native.getApiKey("anthropic").then((key) => handlers.current.applyKey("anthropic", key), () => {});
+    handlers.current.refreshClaudeCode();
+    // Claude Code appelle les outils NozBar par le serveur MCP : ils s'exécutent dans le tour en cours.
+    const stopBridge = startMcpBridge(() => claudeCodeRef.current?.active ?? null);
 
     const win = getCurrentWindow();
     const subscriptions = [
@@ -348,6 +369,7 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => handlers.current.onKey(e);
     window.addEventListener("keydown", onKey);
     return () => {
+      stopBridge();
       window.removeEventListener("keydown", onKey);
       subscriptions.forEach((p) => p.then((unlisten) => unlisten()));
     };
@@ -403,7 +425,11 @@ export default function App() {
           autoComplete="off"
           disabled={listening}
         />
-        {expert && <span className="badge" title="Claude Sonnet répond jusqu'à la fermeture de la bulle">Sonnet</span>}
+        {expert && (
+          <span className="badge" title={`Claude ${expert} répond jusqu'à la fermeture de la bulle`}>
+            {expert}
+          </span>
+        )}
       </form>
 
       {hasBody && (
