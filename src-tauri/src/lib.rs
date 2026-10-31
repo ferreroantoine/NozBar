@@ -7,6 +7,7 @@ mod mcp;
 mod resolver;
 mod running_apps;
 mod secrets;
+mod settings;
 mod system;
 
 use std::sync::{Arc, Mutex};
@@ -233,6 +234,7 @@ async fn claude_code_send(
             resume.as_deref(),
             &server.config_json(),
             &claude_code::system_prompt(&workspace),
+            &settings::allowed_tools(&app.state::<SettingsState>().get().permissions),
         );
         claude_code::run(&app.state::<claude_code::Running>(), &prompt, args, |line| {
             let _ = on_line.send(line);
@@ -240,6 +242,64 @@ async fn claude_code_send(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn claude_code_login() -> Result<(), String> {
+    claude_code::login()
+}
+
+#[tauri::command]
+async fn claude_code_logout() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(claude_code::logout).await.map_err(|e| e.to_string())?
+}
+
+/// Réglages en mémoire, et leur fichier.
+pub struct SettingsState {
+    path: std::path::PathBuf,
+    current: Mutex<settings::Settings>,
+}
+
+impl SettingsState {
+    fn get(&self) -> settings::Settings {
+        self.current.lock().unwrap().clone()
+    }
+}
+
+#[tauri::command]
+fn get_settings(state: tauri::State<SettingsState>) -> settings::Settings {
+    state.get()
+}
+
+/// Enregistre et prévient toutes les fenêtres (la bulle applique les règles tout de suite).
+#[tauri::command]
+fn set_settings(app: AppHandle, settings: settings::Settings, state: tauri::State<SettingsState>) -> Result<(), String> {
+    settings::save(&state.path, &settings)?;
+    *state.current.lock().unwrap() = settings.clone();
+    let _ = app.emit("settings:changed", settings);
+    Ok(())
+}
+
+/// Fenêtre de paramètres : créée à la demande, réaffichée si elle existe déjà.
+#[tauri::command]
+fn open_preferences(app: AppHandle) -> Result<(), String> {
+    show_preferences(&app)
+}
+
+fn show_preferences(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        return win.set_focus().map_err(|e| e.to_string());
+    }
+    tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("index.html#settings".into()))
+        .title("Paramètres de NozBar")
+        .inner_size(560.0, 720.0)
+        .min_inner_size(460.0, 480.0)
+        .center()
+        .build()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -345,7 +405,7 @@ pub fn run() {
         // L'état de la souris et du clavier se lit ici, au moment même de la perte de focus :
         // l'interface reçoit l'événement trop tard, le bouton serait déjà relâché.
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Focused(false) = event {
+            if let (tauri::WindowEvent::Focused(false), "main") = (event, window.label()) {
                 let (mouse, keys) = system::input_state();
                 let _ = window.emit("bubble:blur", serde_json::json!({ "mouse": mouse, "keys": keys }));
             }
@@ -359,6 +419,10 @@ pub fn run() {
                 let _ = emitter.emit("mcp:call", serde_json::json!({ "id": id, "name": name, "args": args }));
             }))?;
             app.manage(server);
+
+            let settings_path = app.path().app_config_dir()?.join("settings.json");
+            let current = Mutex::new(settings::load(&settings_path));
+            app.manage(SettingsState { path: settings_path, current });
 
             // L'index des applications prend 1 à 2 s : on le construit en arrière-plan.
             let indexer = handle.clone();
@@ -379,8 +443,9 @@ pub fn run() {
             }
 
             let open = MenuItem::with_id(app, "open", "Ouvrir NozBar", true, None::<&str>)?;
+            let prefs = MenuItem::with_id(app, "settings", "Paramètres", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
+            let menu = Menu::with_items(app, &[&open, &prefs, &quit])?;
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().cloned().expect("icône manquante"))
                 .tooltip("NozBar")
@@ -391,6 +456,9 @@ pub fn run() {
                             show_bubble(&win);
                             let _ = app.emit("bubble:open", ());
                         }
+                    }
+                    "settings" => {
+                        let _ = show_preferences(app);
                     }
                     "quit" => app.exit(0),
                     _ => {}
@@ -418,6 +486,11 @@ pub fn run() {
             claude_code_status,
             claude_code_send,
             claude_code_cancel,
+            claude_code_login,
+            claude_code_logout,
+            get_settings,
+            set_settings,
+            open_preferences,
             open_url,
             open_settings,
             media_control,
