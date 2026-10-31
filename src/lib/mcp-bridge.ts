@@ -6,7 +6,8 @@ import { errorMessage, executeTool, TOOLS, type ToolContext, type Ui } from "./t
 
 /** Claude Code a sa propre recherche web, et il est lui-même l'expert. */
 const EXCLUDED = new Set(["web_search", "ask_expert"]);
-const MAX_COMMAND_CHARS = 200;
+/** Au-delà, une commande ne peut pas être relue raisonnablement dans la bulle : elle est refusée. */
+const MAX_COMMAND_CHARS = 2000;
 
 export interface McpCall {
   id: number;
@@ -25,14 +26,19 @@ export function mcpToolList() {
 }
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
-const shorten = (s: string) => (s.length > MAX_COMMAND_CHARS ? `${s.slice(0, MAX_COMMAND_CHARS)}…` : s);
 
 /** Question posée à l'utilisateur pour une action de Claude Code. */
 export function describeRequest(tool: string, input: Record<string, unknown>): string {
   switch (tool) {
     case "Bash":
     case "PowerShell":
-      return `Claude veut exécuter : ${shorten(str(input.command))}`;
+      // En entier : une fin de commande cachée pourrait contenir l'action dangereuse.
+      return `Claude veut exécuter : ${str(input.command)}`;
+    case "Read":
+      return `Claude veut lire : ${str(input.file_path)}`;
+    case "Glob":
+    case "Grep":
+      return `Claude veut chercher dans : ${str(input.path) || "vos dossiers"}`;
     case "Write":
     case "Edit":
     case "NotebookEdit":
@@ -47,17 +53,40 @@ export async function handleMcpCall(call: McpCall, active: ActiveTurn): Promise<
   if (call.name === "approve") {
     const tool = str(args.tool_name);
     const input = args.input && typeof args.input === "object" ? (args.input as Record<string, unknown>) : {};
+    const tooLong = str(input.command).length > MAX_COMMAND_CHARS;
     // Sans tour en cours (bulle fermée), personne ne peut répondre : on refuse.
-    const allowed = active !== null && !active.signal.aborted && (await active.ui.confirm(describeRequest(tool, input), "Autoriser"));
+    const allowed =
+      !tooLong &&
+      active !== null &&
+      !active.signal.aborted &&
+      (await active.ui.confirm(describeRequest(tool, input), "Autoriser"));
     const decision = allowed
       ? { behavior: "allow", updatedInput: input }
-      : { behavior: "deny", message: active ? "Refusé par l'utilisateur" : "Aucune conversation en cours" };
+      : {
+          behavior: "deny",
+          message: tooLong
+            ? "Commande trop longue pour être relue : découpe-la en étapes plus courtes"
+            : active
+              ? "Refusé par l'utilisateur"
+              : "Aucune conversation en cours",
+        };
     return { text: JSON.stringify(decision), isError: false };
   }
 
   if (!active || active.signal.aborted) return { text: "Aucune conversation NozBar en cours", isError: true };
   if (EXCLUDED.has(call.name) || !TOOLS.some((t) => t.name === call.name)) {
     return { text: `Outil inconnu : ${call.name}`, isError: true };
+  }
+  // Écrire un script puis l'ouvrir contournerait la relecture de la commande : la confirmation
+  // n'afficherait qu'un nom de fichier. Claude doit passer par Bash, dont la commande s'affiche en entier.
+  if (call.name === "open_file") {
+    const info = await native.checkFile(str(args.path)).catch(() => null);
+    if (info?.needsConfirmation && info.inClaudeWorkspace) {
+      return {
+        text: "Ce programme est dans ton dossier de travail : lance-le avec Bash pour que l'utilisateur voie la commande",
+        isError: true,
+      };
+    }
   }
   const ctx: ToolContext = {
     ui: active.ui,

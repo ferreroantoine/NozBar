@@ -149,8 +149,14 @@ pub struct FileCheck {
     /// Nom réel du fichier, tel que Windows le résout.
     pub name: String,
     pub needs_confirmation: bool,
+    /// Fichier rangé dans le dossier de travail de Claude Code (donc possiblement créé par lui).
+    pub in_claude_workspace: bool,
     #[serde(skip)]
     path: PathBuf,
+}
+
+pub fn is_inside(real: &Path, dir: &Path) -> bool {
+    std::fs::canonicalize(dir).is_ok_and(|d| real.starts_with(d))
 }
 
 /// `\\?\C:\…` → `C:\…` : ShellExecute et certains programmes refusent le préfixe étendu.
@@ -170,16 +176,13 @@ pub fn resolve(path: &str, roots: &[PathBuf]) -> Result<FileCheck, String> {
     if !real.is_file() {
         return Err(format!("Ce n'est pas un fichier : {path}"));
     }
-    let inside = roots
-        .iter()
-        .filter_map(|r| std::fs::canonicalize(r).ok())
-        .any(|r| real.starts_with(r));
-    if !inside {
+    if !roots.iter().any(|r| is_inside(&real, r)) {
         return Err("Seuls les fichiers de Téléchargements, Bureau et Documents peuvent être ouverts".into());
     }
     let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let ext = split_ext(&name).1.to_ascii_lowercase();
-    Ok(FileCheck { name, needs_confirmation: !OPEN_DIRECTLY.contains(&ext.as_str()), path: real })
+    let in_claude_workspace = crate::claude_code::workspace().is_ok_and(|w| is_inside(&real, &w));
+    Ok(FileCheck { name, needs_confirmation: !OPEN_DIRECTLY.contains(&ext.as_str()), in_claude_workspace, path: real })
 }
 
 fn search_roots() -> Vec<PathBuf> {
@@ -271,6 +274,14 @@ mod tests {
         assert!(resolve(&root.join("rapport.pdf").to_string_lossy(), &[other.join("ailleurs")]).is_err());
         assert!(resolve(r"\\serveur\partage\rapport.pdf", &[root.clone()]).is_err());
         assert!(resolve("//serveur/partage/rapport.pdf", &[root]).is_err());
+    }
+
+    #[test]
+    fn knows_files_created_in_the_claude_workspace() {
+        let root = sandbox(&["rapport.pdf"]);
+        let file = std::fs::canonicalize(root.join("rapport.pdf")).unwrap();
+        assert!(is_inside(&file, &root));
+        assert!(!is_inside(&file, &root.join("autre")));
     }
 
     #[test]

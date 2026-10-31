@@ -12,8 +12,10 @@ use std::sync::Mutex;
 use serde::Serialize;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-/// Outils utilisables sans demander : lecture, web, et tous les outils NozBar (qui ont leurs propres confirmations).
-const ALLOWED_TOOLS: &str = "Read,Glob,Grep,WebSearch,WebFetch,mcp__nozbar";
+/// Outils utilisables sans demander : web et outils NozBar (qui ont leurs propres confirmations).
+/// La lecture dans le dossier de travail est libre d'office ; ailleurs, elle passe par la bulle
+/// (lecture libre + WebFetch permettrait à une page piégée de faire fuiter des fichiers).
+const ALLOWED_TOOLS: &str = "WebSearch,WebFetch,mcp__nozbar";
 
 pub fn build_args(model: &str, resume: Option<&str>, mcp_config: &str, system_prompt: &str) -> Vec<String> {
     let mut args: Vec<String> = [
@@ -22,6 +24,8 @@ pub fn build_args(model: &str, resume: Option<&str>, mcp_config: &str, system_pr
         "--verbose",
         "--include-partial-messages",
         "--model", model,
+        // Ni réglages globaux ni réglages du dossier : leurs règles « allow » contourneraient la bulle.
+        "--setting-sources=",
         "--strict-mcp-config",
         "--mcp-config", mcp_config,
         "--permission-prompt-tool", "mcp__nozbar__approve",
@@ -50,7 +54,8 @@ pub fn system_prompt(workspace: &std::path::Path) -> String {
         "Les commandes système et les écritures hors de ce dossier demandent une confirmation à l'utilisateur : \
          ne les utilise que si c'est nécessaire.",
     ]
-    .join("\n")
+    // Une seule ligne : un saut de ligne casserait l'argument si Claude Code est installé en .cmd (npm).
+    .join(" ")
 }
 
 /// Variables posées par une session Claude Code parente (ex. `tauri dev` lancé depuis Claude Code) :
@@ -117,6 +122,18 @@ pub struct Running {
 }
 
 impl Running {
+    fn started(&self, pid: u32) {
+        *self.pid.lock().unwrap() = Some(pid);
+    }
+
+    /// Un ancien tour qui se termine ne doit pas effacer le processus du tour suivant.
+    fn finished(&self, pid: u32) {
+        let mut current = self.pid.lock().unwrap();
+        if *current == Some(pid) {
+            *current = None;
+        }
+    }
+
     pub fn cancel(&self) {
         if let Some(pid) = self.pid.lock().unwrap().take() {
             // Child::kill n'arrêterait que claude.exe, pas les commandes qu'il a lancées.
@@ -133,6 +150,8 @@ pub fn run(
     mut on_line: impl FnMut(String),
 ) -> Result<(), String> {
     let exe = find_exe().ok_or("Claude Code n'est pas installé")?;
+    // Un seul tour à la fois : un tour précédent encore vivant (annulé mais pas encore tué) est arrêté.
+    running.cancel();
     let mut child = command(&exe)
         .args(args)
         .current_dir(workspace()?)
@@ -141,7 +160,8 @@ pub fn run(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Claude Code ne démarre pas : {e}"))?;
-    *running.pid.lock().unwrap() = Some(child.id());
+    let pid = child.id();
+    running.started(pid);
 
     // Le message passe par stdin : pas de souci de guillemets ni de longueur de ligne de commande.
     if let Some(mut stdin) = child.stdin.take() {
@@ -156,14 +176,20 @@ pub fn run(
         text
     });
     if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if !line.trim().is_empty() {
+        // Octets bruts puis conversion tolérante : une ligne mal encodée ne doit pas arrêter la lecture
+        // (le processus resterait bloqué sur un tuyau plein).
+        let mut reader = BufReader::new(stdout);
+        let mut buf = Vec::new();
+        while reader.read_until(b'\n', &mut buf).unwrap_or(0) > 0 {
+            let line = String::from_utf8_lossy(&buf).trim().to_string();
+            if !line.is_empty() {
                 on_line(line);
             }
+            buf.clear();
         }
     }
     let exit = child.wait().map_err(|e| e.to_string())?;
-    running.pid.lock().unwrap().take();
+    running.finished(pid);
     let stderr = stderr_reader.join().unwrap_or_default();
     if exit.success() {
         Ok(())
@@ -197,6 +223,32 @@ mod tests {
         assert!(value_after(&args, "--resume").is_none());
         // --bare n'utilise pas l'abonnement : il ne doit jamais apparaître.
         assert!(!args.iter().any(|a| a == "--bare"));
+    }
+
+    #[test]
+    fn ignores_the_users_global_claude_settings_and_gates_reads() {
+        let args = build_args("sonnet", None, "{}", "");
+        // Les règles « allow » des réglages globaux contourneraient la confirmation dans la bulle.
+        assert!(args.iter().any(|a| a == "--setting-sources="));
+        // Lire hors du dossier de travail passe par la bulle : lecture libre + WebFetch = fuite possible.
+        let allowed = value_after(&args, "--allowedTools").unwrap();
+        assert!(!allowed.split(',').any(|t| t == "Read" || t == "Glob" || t == "Grep"), "{allowed}");
+    }
+
+    #[test]
+    fn system_prompt_fits_on_one_line() {
+        // Un saut de ligne casserait l'argument si Claude Code est installé en .cmd (npm).
+        assert!(!system_prompt(std::path::Path::new("C:\\x")).contains('\n'));
+    }
+
+    #[test]
+    fn an_old_run_does_not_forget_the_new_process() {
+        let running = Running::default();
+        running.started(200);
+        running.finished(100);
+        assert_eq!(*running.pid.lock().unwrap(), Some(200));
+        running.finished(200);
+        assert_eq!(*running.pid.lock().unwrap(), None);
     }
 
     #[test]

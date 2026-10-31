@@ -5,7 +5,10 @@ vi.mock("./tools", async (importOriginal) => ({
   executeTool: vi.fn(async () => ({ ok: true, message: "Lyon : 12 °C", data: { temp: 12 } })),
 }));
 
+vi.mock("./native", () => ({ native: { checkFile: vi.fn() } }));
+
 import { describeRequest, handleMcpCall, mcpToolList } from "./mcp-bridge";
+import { native } from "./native";
 import { executeTool, type Ui } from "./tools";
 
 function turn(confirmed: boolean) {
@@ -61,7 +64,41 @@ describe("handleMcpCall", () => {
   });
 });
 
+describe("handleMcpCall — garde-fous", () => {
+  it("montre la commande en entier, et refuse une commande trop longue pour être relue", async () => {
+    const { active, confirm } = turn(true);
+    const long = `echo ${"a".repeat(300)} && del important.txt`;
+    await handleMcpCall({ id: 7, name: "approve", args: { tool_name: "Bash", input: { command: long } } }, active);
+    expect(confirm).toHaveBeenCalledWith(`Claude veut exécuter : ${long}`, "Autoriser");
+
+    const huge = "x".repeat(3000);
+    const out = await handleMcpCall({ id: 8, name: "approve", args: { tool_name: "Bash", input: { command: huge } } }, active);
+    expect(JSON.parse(out.text)).toMatchObject({ behavior: "deny" });
+  });
+
+  it("refuse de lancer un programme créé dans le dossier de Claude", async () => {
+    vi.mocked(native.checkFile).mockResolvedValue({ name: "x.bat", needsConfirmation: true, inClaudeWorkspace: true });
+    const { active } = turn(true);
+    const out = await handleMcpCall({ id: 9, name: "open_file", args: { path: "C:\\Users\\moi\\Documents\\NozBar\\x.bat" } }, active);
+    expect(out.isError).toBe(true);
+    expect(executeTool).not.toHaveBeenCalled();
+  });
+
+  it("laisse ouvrir un document du dossier de Claude", async () => {
+    vi.mocked(native.checkFile).mockResolvedValue({ name: "notes.md", needsConfirmation: false, inClaudeWorkspace: true });
+    const { active } = turn(true);
+    await handleMcpCall({ id: 10, name: "open_file", args: { path: "C:\\N\\notes.md" } }, active);
+    expect(executeTool).toHaveBeenCalled();
+  });
+});
+
 describe("describeRequest", () => {
+  it("décrit une lecture hors du dossier de travail", () => {
+    expect(describeRequest("Read", { file_path: "C:\\Users\\moi\\.ssh\\id_rsa" })).toBe(
+      "Claude veut lire : C:\\Users\\moi\\.ssh\\id_rsa",
+    );
+  });
+
   it("formule la demande selon l'outil", () => {
     expect(describeRequest("Write", { file_path: "C:\\Users\\moi\\Desktop\\notes.md" })).toBe(
       "Claude veut écrire : C:\\Users\\moi\\Desktop\\notes.md",
