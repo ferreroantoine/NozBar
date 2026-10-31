@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { Assistant } from "./lib/assistant";
+import { GeminiProvider as Assistant } from "./lib/providers/gemini";
 import { native } from "./lib/native";
 import { Recorder, toWavBase64 } from "./lib/recorder";
 import { matchLocal } from "./lib/router";
@@ -140,6 +140,7 @@ export default function App() {
       if (intent?.kind === "tool") {
         const ctx: ToolContext = {
           ui,
+          signal: ctrl.signal,
           search: (q) => requireAssistant().search(q, ctrl.signal),
         };
         const result = await executeTool(intent.name, intent.args, ctx);

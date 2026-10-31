@@ -1,7 +1,7 @@
 // Fournisseur Gemini : conversation en streaming avec boucle d'outils, recherche web, transcription.
 
 import { GoogleGenAI, type Content, type FunctionCall, type Part } from "@google/genai";
-import { DECLARATIONS, executeTool, toolStatus, type Source, type ToolContext, type Ui } from "./tools";
+import { executeTool, geminiDeclarations, toolStatus, type Source, type ToolContext, type Ui } from "../tools";
 
 /**
  * Alias qui suivent les derniers modèles. Flash-Lite répond en moins d'une seconde ;
@@ -85,7 +85,7 @@ function systemPrompt(): string {
   ].join("\n");
 }
 
-export class Assistant {
+export class GeminiProvider {
   private ai: GoogleGenAI;
   private history: Content[] = [];
 
@@ -110,7 +110,7 @@ export class Assistant {
   }
 
   private async turn(text: string, ui: Ui, signal: AbortSignal): Promise<string> {
-    const ctx: ToolContext = { ui, search: (q) => this.search(q, signal) };
+    const ctx: ToolContext = { ui, signal, search: (q) => this.search(q, signal) };
     this.history.push({ role: "user", parts: [{ text }] });
     let answer = "";
 
@@ -125,7 +125,7 @@ export class Assistant {
             contents: this.history,
             config: {
               systemInstruction: systemPrompt(),
-              tools: [{ functionDeclarations: DECLARATIONS }],
+              tools: [{ functionDeclarations: geminiDeclarations() }],
               abortSignal: attemptSignal,
             },
           });
