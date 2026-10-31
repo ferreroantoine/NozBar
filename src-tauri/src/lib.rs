@@ -148,17 +148,17 @@ fn get_shortcut(state: tauri::State<AppState>) -> String {
 }
 
 #[tauri::command]
-fn get_api_key() -> Result<Option<String>, String> {
-    secrets::get()
+fn get_api_key(provider: String) -> Result<Option<String>, String> {
+    secrets::get(&provider)
 }
 
 #[tauri::command]
-fn set_api_key(key: String) -> Result<(), String> {
+fn set_api_key(provider: String, key: String) -> Result<(), String> {
     let key = key.trim();
     if key.is_empty() {
-        return secrets::delete();
+        return secrets::delete(&provider);
     }
-    secrets::set(key)
+    secrets::set(&provider, key)
 }
 
 #[derive(Serialize)]

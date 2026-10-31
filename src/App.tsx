@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "re
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { GeminiProvider as Assistant } from "./lib/providers/gemini";
-import { native } from "./lib/native";
+import { native, type Provider } from "./lib/native";
 import { Pending, type PendingRequest } from "./lib/pending";
 import { Recorder, toWavBase64 } from "./lib/recorder";
 import { matchLocal } from "./lib/router";
@@ -23,6 +23,12 @@ const MIN_SPEECH_SECONDS = 0.35;
 const BLUR_GRACE_MS = 300;
 
 const KEY_COMMAND = /^\/(?:cle|clé|key)$/i;
+const CLAUDE_KEY_COMMAND = /^\/(?:cle|clé|key)[- ]?claude$/i;
+
+const KEY_PLACEHOLDER: Record<Provider, string> = {
+  gemini: "Collez votre clé API Gemini, puis Entrée",
+  anthropic: "Collez votre clé API Claude (Anthropic), puis Entrée — vide pour la supprimer",
+};
 
 /** Palier typographique : il ne fait que descendre pendant le streaming. */
 function tier(text: string): "short" | "medium" | "long" {
@@ -35,7 +41,8 @@ const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortEr
 
 export default function App() {
   const [open, setOpen] = useState(false);
-  const [setup, setSetup] = useState(false);
+  /** Saisie d'une clé API en cours, pour ce fournisseur. */
+  const [setup, setSetup] = useState<Provider | null>(null);
   const [listening, setListening] = useState(false);
   const [busy, setBusy] = useState(false);
   const [level, setLevel] = useState(0);
@@ -51,6 +58,7 @@ export default function App() {
   const bubbleRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const assistantRef = useRef<Assistant | null>(null);
+  const anthropicKey = useRef<string | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const closeTimer = useRef<number | undefined>(undefined);
@@ -107,10 +115,11 @@ export default function App() {
   async function submit(raw: string) {
     const text = raw.trim();
     if (!text) return;
-    if (KEY_COMMAND.test(text)) {
+    const keyFor = CLAUDE_KEY_COMMAND.test(text) ? "anthropic" : KEY_COMMAND.test(text) ? "gemini" : null;
+    if (keyFor) {
       setInput("");
       resetTurn();
-      setSetup(true);
+      setSetup(keyFor);
       return;
     }
 
@@ -175,25 +184,25 @@ export default function App() {
 
   function requireAssistant(): Assistant {
     if (!assistantRef.current) {
-      setSetup(true);
+      setSetup("gemini");
       throw new Error("Aucune clé API Gemini enregistrée");
     }
     return assistantRef.current;
   }
 
-  async function saveKey(raw: string) {
+  function applyKey(provider: Provider, key: string | null) {
+    if (provider === "gemini") assistantRef.current = key ? new Assistant(key) : null;
+    else anthropicKey.current = key;
+  }
+
+  async function saveKey(provider: Provider, raw: string) {
     const key = raw.trim();
     try {
-      await native.setApiKey(key);
+      await native.setApiKey(provider, key);
       setInput("");
-      if (!key) {
-        assistantRef.current = null;
-        setAnswer("Clé supprimée.");
-        return;
-      }
-      assistantRef.current = new Assistant(key);
-      setSetup(false);
-      setAnswer("Clé enregistrée dans le Gestionnaire d'identification Windows.");
+      applyKey(provider, key || null);
+      setSetup(null);
+      setAnswer(key ? "Clé enregistrée dans le Gestionnaire d'identification Windows." : "Clé supprimée.");
     } catch (e) {
       setError(errorMessage(e));
     }
@@ -203,7 +212,7 @@ export default function App() {
 
   function startListening() {
     if (setup || !assistantRef.current) {
-      setSetup(true);
+      setSetup(setup ?? "gemini");
       return;
     }
     resetTurn();
@@ -292,18 +301,20 @@ export default function App() {
   }
 
   // Les écouteurs Tauri sont branchés une seule fois : ils passent par une ref vers les handlers à jour.
-  const handlers = useRef({ openBubble, close, startListening, stopListening, onKey });
-  handlers.current = { openBubble, close, startListening, stopListening, onKey };
+  const handlers = useRef({ openBubble, close, startListening, stopListening, onKey, applyKey });
+  handlers.current = { openBubble, close, startListening, stopListening, onKey, applyKey };
 
   useEffect(() => {
     native.getShortcut().then((s) => s && setShortcut(s), () => {});
-    native.getApiKey().then(
+    native.getApiKey("gemini").then(
       (key) => {
-        if (key) assistantRef.current = new Assistant(key);
-        else setSetup(true);
+        if (key) handlers.current.applyKey("gemini", key);
+        else setSetup("gemini");
       },
       (e) => setError(errorMessage(e)),
     );
+    // Sans clé Claude, NozBar fonctionne : seul le passage à l'expert est indisponible.
+    native.getApiKey("anthropic").then((key) => handlers.current.applyKey("anthropic", key), () => {});
 
     const win = getCurrentWindow();
     const subscriptions = [
@@ -347,14 +358,14 @@ export default function App() {
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (setup) void saveKey(input);
+    if (setup) void saveKey(setup, input);
     else if (question) answerFromInput();
     else void submit(input);
   };
 
   const orbState: OrbState = listening ? "listening" : busy ? "thinking" : "idle";
   const placeholder = setup
-    ? "Collez votre clé API Gemini, puis Entrée"
+    ? KEY_PLACEHOLDER[setup]
     : `Demandez quelque chose… ou maintenez ${shortcut} pour parler`;
   const hasBody = Boolean(prompt || answer || status || error || sources.length || question);
 

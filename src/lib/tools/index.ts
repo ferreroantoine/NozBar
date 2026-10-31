@@ -27,11 +27,11 @@ export function geminiDeclarations(exclude: string[] = []): FunctionDeclaration[
   }));
 }
 
-export function claudeTools(exclude: string[] = []): Anthropic.Messages.Tool[] {
+export function claudeTools(exclude: string[] = []): Anthropic.Beta.BetaTool[] {
   return included(exclude).map((t) => ({
     name: t.name,
     description: t.description,
-    input_schema: t.parameters as Anthropic.Messages.Tool.InputSchema,
+    input_schema: t.parameters as Anthropic.Beta.BetaTool.InputSchema,
     eager_input_streaming: true,
   }));
 }
