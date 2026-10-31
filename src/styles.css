@@ -88,6 +88,18 @@ body,
   color: rgba(255, 255, 255, 0.4);
 }
 
+.badge {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  animation: fade-in 200ms ease-out;
+}
+
 /* ---------- Orbe ---------- */
 
 .orb {

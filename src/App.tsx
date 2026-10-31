@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { GeminiProvider as Assistant } from "./lib/providers/gemini";
+import { Conversation } from "./lib/conversation";
+import { ClaudeProvider } from "./lib/providers/claude";
+import { GeminiProvider } from "./lib/providers/gemini";
 import { native, type Provider } from "./lib/native";
 import { Pending, type PendingRequest } from "./lib/pending";
 import { Recorder, toWavBase64 } from "./lib/recorder";
@@ -54,11 +56,14 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [shortcut, setShortcut] = useState("Alt+Espace");
   const [question, setQuestion] = useState<PendingRequest | null>(null);
+  /** Claude Sonnet a pris la main pour cette bulle. */
+  const [expert, setExpert] = useState(false);
 
   const bubbleRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const assistantRef = useRef<Assistant | null>(null);
-  const anthropicKey = useRef<string | null>(null);
+  const assistantRef = useRef<Conversation | null>(null);
+  /** Expert optionnel : sans clé Claude, la Conversation reste sur Gemini. */
+  const claudeRef = useRef<ClaudeProvider | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const closeTimer = useRef<number | undefined>(undefined);
@@ -87,6 +92,7 @@ export default function App() {
     window.clearTimeout(closeTimer.current);
     resetTurn();
     setInput("");
+    setExpert(false);
     assistantRef.current?.reset();
     openRef.current = true;
     openedAt.current = Date.now();
@@ -141,6 +147,7 @@ export default function App() {
       confirm: async (message, action) =>
         (await pending.open({ kind: "confirm", question: message, choices: [action, "Annuler"], allowText: false })) ===
         action,
+      expert: () => live() && setExpert(true),
     };
     const finish = (autoClose: boolean) => {
       if (!live()) return;
@@ -182,7 +189,7 @@ export default function App() {
     }
   }
 
-  function requireAssistant(): Assistant {
+  function requireAssistant(): Conversation {
     if (!assistantRef.current) {
       setSetup("gemini");
       throw new Error("Aucune clé API Gemini enregistrée");
@@ -191,8 +198,11 @@ export default function App() {
   }
 
   function applyKey(provider: Provider, key: string | null) {
-    if (provider === "gemini") assistantRef.current = key ? new Assistant(key) : null;
-    else anthropicKey.current = key;
+    if (provider === "gemini") {
+      assistantRef.current = key ? new Conversation(new GeminiProvider(key), () => claudeRef.current) : null;
+    } else {
+      claudeRef.current = key ? new ClaudeProvider(key) : null;
+    }
   }
 
   async function saveKey(provider: Provider, raw: string) {
@@ -387,6 +397,7 @@ export default function App() {
           autoComplete="off"
           disabled={listening}
         />
+        {expert && <span className="badge" title="Claude Sonnet répond jusqu'à la fermeture de la bulle">Sonnet</span>}
       </form>
 
       {hasBody && (

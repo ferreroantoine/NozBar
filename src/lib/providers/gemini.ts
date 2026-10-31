@@ -82,27 +82,39 @@ function systemPrompt(): string {
     "Pour la météo, utilise get_weather. Pour l'actualité ou tout fait récent ou incertain, utilise web_search.",
     "Pour un fichier (téléchargement, document…), utilise find_file puis open_file.",
     "Après une action, confirme en une courte phrase sans répéter les détails techniques.",
+    "Si la demande demande un raisonnement en plusieurs étapes, une explication détaillée, le fonctionnement précis " +
+      "d'un logiciel, du code ou une rédaction longue, ou si ta première tentative a échoué, appelle ask_expert " +
+      "au lieu de répondre toi-même.",
     `Date et heure actuelles : ${now}.`,
   ].join("\n");
 }
+
+/** Réponse de Gemini, ou demande de passage de main à l'expert. */
+export type GeminiReply = { answer: string } | { handoff: string };
 
 export class GeminiProvider {
   private ai: GoogleGenAI;
   private history: Content[] = [];
 
-  constructor(apiKey: string) {
-    this.ai = new GoogleGenAI({ apiKey });
+  constructor(apiKey: string, ai?: GoogleGenAI) {
+    this.ai = ai ?? new GoogleGenAI({ apiKey });
   }
 
   reset() {
     this.history = [];
   }
 
-  /** Envoie un message utilisateur et diffuse la réponse ; renvoie le texte final. */
-  async send(text: string, ui: Ui, signal: AbortSignal): Promise<string> {
+  /**
+   * Envoie un message utilisateur et diffuse la réponse.
+   * Avec `canHandoff`, un appel à ask_expert interrompt le tour et renvoie la tâche à confier.
+   */
+  async send(text: string, ui: Ui, signal: AbortSignal, canHandoff = false): Promise<GeminiReply> {
     const start = this.history.length;
     try {
-      return await this.turn(text, ui, signal);
+      const reply = await this.turn(text, ui, signal, canHandoff);
+      // L'expert reprend ce tour : on ne garde pas un appel d'outil resté sans réponse.
+      if ("handoff" in reply) this.history.length = start;
+      return reply;
     } catch (e) {
       // Un tour inachevé laisserait l'historique incohérent (appel d'outil sans réponse…).
       this.history.length = start;
@@ -110,7 +122,7 @@ export class GeminiProvider {
     }
   }
 
-  private async turn(text: string, ui: Ui, signal: AbortSignal): Promise<string> {
+  private async turn(text: string, ui: Ui, signal: AbortSignal, canHandoff: boolean): Promise<GeminiReply> {
     const ctx: ToolContext = { ui, signal, search: (q) => this.search(q, signal) };
     this.history.push({ role: "user", parts: [{ text }] });
     let answer = "";
@@ -123,7 +135,7 @@ export class GeminiProvider {
         async (model, attemptSignal) => {
           const stream = await this.ai.models.generateContentStream({
             model,
-            contents: this.history,
+            contents: [...this.history],
             config: {
               systemInstruction: systemPrompt(),
               tools: [{ functionDeclarations: geminiDeclarations() }],
@@ -135,7 +147,9 @@ export class GeminiProvider {
               modelParts.push(part);
               if (part.functionCall?.name) {
                 calls.push(part.functionCall);
-                ui.status(toolStatus(part.functionCall.name, part.functionCall.args ?? {}));
+                if (part.functionCall.name !== "ask_expert" || !canHandoff) {
+                  ui.status(toolStatus(part.functionCall.name, part.functionCall.args ?? {}));
+                }
               } else if (part.text && !part.thought) {
                 answer += part.text;
                 ui.text(part.text);
@@ -148,7 +162,11 @@ export class GeminiProvider {
         () => modelParts.length === 0,
       );
       this.history.push({ role: "model", parts: modelParts });
-      if (!calls.length) return answer;
+      if (!calls.length) return { answer };
+
+      // Le passage de main l'emporte : les autres appels du même message sont laissés à l'expert.
+      const expert = canHandoff && calls.find((c) => c.name === "ask_expert");
+      if (expert) return { handoff: typeof expert.args?.task === "string" ? expert.args.task : "" };
 
       const responses: Part[] = [];
       for (const call of calls) {

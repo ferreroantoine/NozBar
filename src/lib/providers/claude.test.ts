@@ -41,6 +41,7 @@ const ui: Ui = {
   sources: vi.fn(),
   confirm: async () => true,
   ask: async () => null,
+  expert: vi.fn(),
 };
 const signal = new AbortController().signal;
 const body = (stream: ReturnType<typeof fakeClient>["stream"], call: number) =>

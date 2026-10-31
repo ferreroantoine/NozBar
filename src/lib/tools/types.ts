@@ -15,6 +15,8 @@ export interface Ui {
   confirm(message: string, action: string): Promise<boolean>;
   /** Pose une question à choix ; `null` si l'utilisateur annule. */
   ask(question: string, choices: string[], allowText: boolean): Promise<string | null>;
+  /** Claude Sonnet prend la main jusqu'à la fermeture de la bulle. */
+  expert(): void;
 }
 
 export interface ToolContext {
