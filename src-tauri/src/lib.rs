@@ -5,6 +5,7 @@ mod fuzzy;
 mod location;
 mod mcp;
 mod resolver;
+mod running_apps;
 mod secrets;
 mod system;
 
@@ -270,6 +271,16 @@ async fn resolve_open(app: AppHandle, query: String) -> Result<resolver::Resolut
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn resolve_close(query: String) -> Result<resolver::Resolution, String> {
+    tauri::async_runtime::spawn_blocking(move || running_apps::resolve(&query)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn close_app(target: String) -> Result<usize, String> {
+    running_apps::close(&target)
+}
+
 /// Seuls les identifiants de l'index sont acceptés : pas de `shell:` arbitraire.
 #[tauri::command]
 fn launch_app(app_id: String, index: tauri::State<AppIndex>) -> Result<(), String> {
@@ -396,6 +407,8 @@ pub fn run() {
             open_app,
             resolve_open,
             launch_app,
+            resolve_close,
+            close_app,
             find_files,
             check_file,
             open_file,
