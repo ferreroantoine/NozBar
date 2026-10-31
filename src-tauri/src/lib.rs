@@ -4,6 +4,7 @@ mod files;
 mod fuzzy;
 mod location;
 mod mcp;
+mod resolver;
 mod secrets;
 mod system;
 
@@ -254,6 +255,22 @@ async fn get_location() -> Result<location::Position, String> {
 }
 
 #[tauri::command]
+async fn resolve_open(app: AppHandle, query: String) -> Result<resolver::Resolution, String> {
+    tauri::async_runtime::spawn_blocking(move || resolver::resolve(&query, &app.state::<AppIndex>()))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Seuls les identifiants de l'index sont acceptés : pas de `shell:` arbitraire.
+#[tauri::command]
+fn launch_app(app_id: String, index: tauri::State<AppIndex>) -> Result<(), String> {
+    if !index.contains_id(&app_id) {
+        return Err("Application inconnue".into());
+    }
+    system::shell_open(&format!("shell:AppsFolder\\{app_id}"))
+}
+
+#[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     system::open_url(&url)
 }
@@ -359,6 +376,8 @@ pub fn run() {
             get_api_key,
             set_api_key,
             open_app,
+            resolve_open,
+            launch_app,
             find_files,
             check_file,
             open_file,

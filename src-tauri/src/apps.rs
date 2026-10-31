@@ -46,6 +46,18 @@ impl AppIndex {
         self.apps.lock().unwrap().is_empty()
     }
 
+    /// Toutes les applications connues (sans les désinstalleurs).
+    pub fn entries(&self) -> Vec<AppEntry> {
+        if self.is_empty() {
+            let _ = self.refresh();
+        }
+        self.apps.lock().unwrap().iter().filter(|a| !is_uninstaller(&a.key)).cloned().collect()
+    }
+
+    pub fn contains_id(&self, app_id: &str) -> bool {
+        self.apps.lock().unwrap().iter().any(|a| a.app_id == app_id)
+    }
+
     pub fn find(&self, query: &str) -> Option<AppEntry> {
         if self.is_empty() {
             let _ = self.refresh();

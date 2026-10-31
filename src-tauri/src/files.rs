@@ -43,7 +43,7 @@ pub struct Candidate {
     pub modified: u64,
 }
 
-fn split_ext(name: &str) -> (&str, &str) {
+pub fn split_ext(name: &str) -> (&str, &str) {
     match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() && (1..=9).contains(&ext.len()) => (stem, ext),
         _ => (name, ""),
