@@ -1,4 +1,7 @@
 mod apps;
+mod files;
+mod fuzzy;
+mod location;
 mod secrets;
 mod system;
 
@@ -145,17 +148,17 @@ fn get_shortcut(state: tauri::State<AppState>) -> String {
 }
 
 #[tauri::command]
-fn get_api_key() -> Result<Option<String>, String> {
-    secrets::get()
+fn get_api_key(provider: String) -> Result<Option<String>, String> {
+    secrets::get(&provider)
 }
 
 #[tauri::command]
-fn set_api_key(key: String) -> Result<(), String> {
+fn set_api_key(provider: String, key: String) -> Result<(), String> {
     let key = key.trim();
     if key.is_empty() {
-        return secrets::delete();
+        return secrets::delete(&provider);
     }
-    secrets::set(key)
+    secrets::set(&provider, key)
 }
 
 #[derive(Serialize)]
@@ -170,6 +173,36 @@ async fn open_app(name: String, index: tauri::State<'_, AppIndex>) -> Result<Lau
         .ok_or_else(|| format!("Aucune application ne correspond à « {name} »"))?;
     system::shell_open(&format!("shell:AppsFolder\\{}", entry.app_id))?;
     Ok(LaunchedApp { name: entry.name })
+}
+
+#[tauri::command]
+async fn find_files(query: String, kind: Option<String>) -> Result<Vec<files::Candidate>, String> {
+    // Le parcours du disque peut prendre une seconde : hors du fil d'exécution des commandes.
+    tauri::async_runtime::spawn_blocking(move || files::find(&query, files::Kind::parse(kind.as_deref())))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// Accès disque potentiellement lents (disque réveillé, antivirus) : jamais sur le fil principal.
+#[tauri::command]
+async fn check_file(path: String) -> Result<files::FileCheck, String> {
+    tauri::async_runtime::spawn_blocking(move || files::check(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn open_file(path: String, confirmed: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || files::open(&path, confirmed))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_location() -> Result<location::Position, String> {
+    tauri::async_runtime::spawn_blocking(location::locate)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -270,6 +303,10 @@ pub fn run() {
             get_api_key,
             set_api_key,
             open_app,
+            find_files,
+            check_file,
+            open_file,
+            get_location,
             open_url,
             open_settings,
             media_control,

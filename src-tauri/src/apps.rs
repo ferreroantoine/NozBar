@@ -9,8 +9,9 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use crate::fuzzy::{normalize, score, MATCH_THRESHOLD};
+
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-const MATCH_THRESHOLD: f64 = 0.82;
 
 #[derive(Deserialize)]
 struct StartApp {
@@ -84,37 +85,6 @@ fn load_start_apps() -> Result<Vec<AppEntry>, String> {
             app_id: a.app_id,
         })
         .collect())
-}
-
-/// Minuscules, sans accents, uniquement lettres/chiffres séparés par une espace.
-fn normalize(s: &str) -> String {
-    deunicode::deunicode(s)
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn score(query: &str, key: &str) -> f64 {
-    if key == query {
-        return 1.0;
-    }
-    if key.starts_with(query) {
-        return 0.95;
-    }
-    if key.split(' ').any(|w| w.starts_with(query)) {
-        return 0.9;
-    }
-    if key.contains(query) {
-        return 0.86;
-    }
-    let whole = strsim::jaro_winkler(query, key);
-    let per_word = key
-        .split(' ')
-        .map(|w| strsim::jaro_winkler(query, w))
-        .fold(0.0, f64::max);
-    whole.max(per_word * 0.97)
 }
 
 fn best_match(apps: &[AppEntry], query: &str) -> Option<AppEntry> {

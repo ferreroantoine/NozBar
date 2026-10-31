@@ -1,11 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { Assistant } from "./lib/assistant";
-import { native } from "./lib/native";
+import { Conversation } from "./lib/conversation";
+import { ClaudeProvider } from "./lib/providers/claude";
+import { GeminiProvider } from "./lib/providers/gemini";
+import { native, type Provider } from "./lib/native";
+import { Pending, type PendingRequest } from "./lib/pending";
 import { Recorder, toWavBase64 } from "./lib/recorder";
+import { setupAfterClose } from "./lib/setup";
 import { matchLocal } from "./lib/router";
 import { errorMessage, executeTool, type Source, type ToolContext, type Ui } from "./lib/tools";
+import { Choices } from "./components/Choices";
 import { Markdown } from "./components/Markdown";
 import { Orb, type OrbState } from "./components/Orb";
 import { Sources } from "./components/Sources";
@@ -21,6 +26,12 @@ const MIN_SPEECH_SECONDS = 0.35;
 const BLUR_GRACE_MS = 300;
 
 const KEY_COMMAND = /^\/(?:cle|clé|key)$/i;
+const CLAUDE_KEY_COMMAND = /^\/(?:cle|clé|key)[- ]?claude$/i;
+
+const KEY_PLACEHOLDER: Record<Provider, string> = {
+  gemini: "Collez votre clé API Gemini, puis Entrée",
+  anthropic: "Collez votre clé API Claude (Anthropic), puis Entrée — vide pour la supprimer",
+};
 
 /** Palier typographique : il ne fait que descendre pendant le streaming. */
 function tier(text: string): "short" | "medium" | "long" {
@@ -33,7 +44,8 @@ const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortEr
 
 export default function App() {
   const [open, setOpen] = useState(false);
-  const [setup, setSetup] = useState(false);
+  /** Saisie d'une clé API en cours, pour ce fournisseur. */
+  const [setup, setSetup] = useState<Provider | null>(null);
   const [listening, setListening] = useState(false);
   const [busy, setBusy] = useState(false);
   const [level, setLevel] = useState(0);
@@ -44,20 +56,28 @@ export default function App() {
   const [sources, setSources] = useState<Source[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [shortcut, setShortcut] = useState("Alt+Espace");
+  const [question, setQuestion] = useState<PendingRequest | null>(null);
+  /** Claude Sonnet a pris la main pour cette bulle. */
+  const [expert, setExpert] = useState(false);
 
   const bubbleRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const assistantRef = useRef<Assistant | null>(null);
+  const assistantRef = useRef<Conversation | null>(null);
+  /** Expert optionnel : sans clé Claude, la Conversation reste sur Gemini. */
+  const claudeRef = useRef<ClaudeProvider | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const closeTimer = useRef<number | undefined>(undefined);
   const autoCloseTimer = useRef<number | undefined>(undefined);
   const openRef = useRef(false);
   const openedAt = useRef(0);
+  const pending = useRef(new Pending()).current;
+  pending.onChange = setQuestion;
 
   // ---------- Cycle de vie de la bulle ----------
 
   function resetTurn() {
+    pending.cancel();
     abortRef.current?.abort();
     abortRef.current = null;
     window.clearTimeout(autoCloseTimer.current);
@@ -73,6 +93,7 @@ export default function App() {
     window.clearTimeout(closeTimer.current);
     resetTurn();
     setInput("");
+    setExpert(false);
     assistantRef.current?.reset();
     openRef.current = true;
     openedAt.current = Date.now();
@@ -88,6 +109,7 @@ export default function App() {
     recorderRef.current = null;
     setListening(false);
     setLevel(0);
+    setSetup((s) => setupAfterClose(s, assistantRef.current !== null));
     resetTurn();
     closeTimer.current = window.setTimeout(() => void native.hideBubble(), CLOSE_MS);
   }
@@ -101,10 +123,11 @@ export default function App() {
   async function submit(raw: string) {
     const text = raw.trim();
     if (!text) return;
-    if (KEY_COMMAND.test(text)) {
+    const keyFor = CLAUDE_KEY_COMMAND.test(text) ? "anthropic" : KEY_COMMAND.test(text) ? "gemini" : null;
+    if (keyFor) {
       setInput("");
       resetTurn();
-      setSetup(true);
+      setSetup(keyFor);
       return;
     }
 
@@ -122,6 +145,15 @@ export default function App() {
       status: (s) => live() && (setStatus(s), setBusy(true)),
       text: (d) => live() && setAnswer((a) => a + d),
       sources: (list) => live() && setSources(list),
+      // Une question d'un tour annulé ne doit jamais apparaître dans une bulle rouverte.
+      ask: async (q, choices, allowText) =>
+        live() ? pending.open({ kind: "ask", question: q, choices, allowText }) : null,
+      confirm: async (message, action) =>
+        live() &&
+        (await pending.open({ kind: "confirm", question: message, choices: [action, "Annuler"], allowText: false })) ===
+          action &&
+        live(),
+      expert: () => live() && setExpert(true),
     };
     const finish = (autoClose: boolean) => {
       if (!live()) return;
@@ -140,6 +172,7 @@ export default function App() {
       if (intent?.kind === "tool") {
         const ctx: ToolContext = {
           ui,
+          signal: ctrl.signal,
           search: (q) => requireAssistant().search(q, ctrl.signal),
         };
         const result = await executeTool(intent.name, intent.args, ctx);
@@ -162,27 +195,30 @@ export default function App() {
     }
   }
 
-  function requireAssistant(): Assistant {
+  function requireAssistant(): Conversation {
     if (!assistantRef.current) {
-      setSetup(true);
+      setSetup("gemini");
       throw new Error("Aucune clé API Gemini enregistrée");
     }
     return assistantRef.current;
   }
 
-  async function saveKey(raw: string) {
+  function applyKey(provider: Provider, key: string | null) {
+    if (provider === "gemini") {
+      assistantRef.current = key ? new Conversation(new GeminiProvider(key), () => claudeRef.current) : null;
+    } else {
+      claudeRef.current = key ? new ClaudeProvider(key) : null;
+    }
+  }
+
+  async function saveKey(provider: Provider, raw: string) {
     const key = raw.trim();
     try {
-      await native.setApiKey(key);
+      await native.setApiKey(provider, key);
       setInput("");
-      if (!key) {
-        assistantRef.current = null;
-        setAnswer("Clé supprimée.");
-        return;
-      }
-      assistantRef.current = new Assistant(key);
-      setSetup(false);
-      setAnswer("Clé enregistrée dans le Gestionnaire d'identification Windows.");
+      applyKey(provider, key || null);
+      setSetup(null);
+      setAnswer(key ? "Clé enregistrée dans le Gestionnaire d'identification Windows." : "Clé supprimée.");
     } catch (e) {
       setError(errorMessage(e));
     }
@@ -192,7 +228,7 @@ export default function App() {
 
   function startListening() {
     if (setup || !assistantRef.current) {
-      setSetup(true);
+      setSetup(setup ?? "gemini");
       return;
     }
     resetTurn();
@@ -246,19 +282,55 @@ export default function App() {
     }
   }
 
+  // ---------- Questions de l'IA ----------
+
+  /** Entrée dans la barre pendant une question : numéro de choix, texte libre, ou validation. */
+  function answerFromInput() {
+    const q = pending.current;
+    if (!q) return;
+    const text = input.trim();
+    if (q.kind === "confirm") {
+      if (!text) pending.answer(q.choices[0]);
+      return;
+    }
+    const n = Number(text);
+    if (Number.isInteger(n) && n >= 1 && n <= q.choices.length) pending.answer(q.choices[n - 1]);
+    else if (q.allowText && text) pending.answer(text);
+    else return;
+    setInput("");
+  }
+
+  function onKey(e: KeyboardEvent) {
+    const q = pending.current;
+    if (e.key === "Escape") {
+      // Échap annule d'abord la question en cours, puis ferme la bulle.
+      if (q) pending.cancel();
+      else close();
+      return;
+    }
+    // Sans texte libre, les touches 1-6 choisissent directement.
+    const n = Number(e.key);
+    if (q?.kind === "ask" && !q.allowText && Number.isInteger(n) && n >= 1 && n <= q.choices.length) {
+      e.preventDefault();
+      pending.answer(q.choices[n - 1]);
+    }
+  }
+
   // Les écouteurs Tauri sont branchés une seule fois : ils passent par une ref vers les handlers à jour.
-  const handlers = useRef({ openBubble, close, startListening, stopListening });
-  handlers.current = { openBubble, close, startListening, stopListening };
+  const handlers = useRef({ openBubble, close, startListening, stopListening, onKey, applyKey });
+  handlers.current = { openBubble, close, startListening, stopListening, onKey, applyKey };
 
   useEffect(() => {
     native.getShortcut().then((s) => s && setShortcut(s), () => {});
-    native.getApiKey().then(
+    native.getApiKey("gemini").then(
       (key) => {
-        if (key) assistantRef.current = new Assistant(key);
-        else setSetup(true);
+        if (key) handlers.current.applyKey("gemini", key);
+        else setSetup("gemini");
       },
       (e) => setError(errorMessage(e)),
     );
+    // Sans clé Claude, NozBar fonctionne : seul le passage à l'expert est indisponible.
+    native.getApiKey("anthropic").then((key) => handlers.current.applyKey("anthropic", key), () => {});
 
     const win = getCurrentWindow();
     const subscriptions = [
@@ -273,7 +345,7 @@ export default function App() {
         }
       }),
     ];
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && handlers.current.close();
+    const onKey = (e: KeyboardEvent) => handlers.current.onKey(e);
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
@@ -302,15 +374,16 @@ export default function App() {
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (setup) void saveKey(input);
+    if (setup) void saveKey(setup, input);
+    else if (question) answerFromInput();
     else void submit(input);
   };
 
   const orbState: OrbState = listening ? "listening" : busy ? "thinking" : "idle";
   const placeholder = setup
-    ? "Collez votre clé API Gemini, puis Entrée"
+    ? KEY_PLACEHOLDER[setup]
     : `Demandez quelque chose… ou maintenez ${shortcut} pour parler`;
-  const hasBody = Boolean(prompt || answer || status || error || sources.length);
+  const hasBody = Boolean(prompt || answer || status || error || sources.length || question);
 
   return (
     <div ref={bubbleRef} className={`bubble ${open ? "is-open" : ""}`}>
@@ -330,6 +403,7 @@ export default function App() {
           autoComplete="off"
           disabled={listening}
         />
+        {expert && <span className="badge" title="Claude Sonnet répond jusqu'à la fermeture de la bulle">Sonnet</span>}
       </form>
 
       {hasBody && (
@@ -338,9 +412,10 @@ export default function App() {
           {answer && (
             <Markdown className={`answer answer-${tier(answer)}`} text={answer} onLink={openExternal} />
           )}
-          {status && (busy || listening) && (
+          {status && (busy || listening) && !question && (
             <p className={`status ${listening ? "status-listening" : ""}`}>{status}</p>
           )}
+          {question && <Choices request={question} onAnswer={(choice) => pending.answer(choice)} />}
           <Sources sources={sources} onOpen={openExternal} />
           {error && <p className="error">{error}</p>}
         </div>
