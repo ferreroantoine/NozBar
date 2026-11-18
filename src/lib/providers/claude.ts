@@ -1,6 +1,7 @@
 // Pilote Claude Sonnet : l'expert qui reprend les demandes complexes, avec les mêmes outils que Gemini.
 
 import Anthropic from "@anthropic-ai/sdk";
+import { memoryPrompt } from "../settings";
 import { claudeTools, executeTool, type ToolContext, type Ui } from "../tools";
 
 export const CLAUDE_MODEL = "claude-sonnet-5-5";
@@ -18,7 +19,10 @@ function systemPrompt(): string {
     "Utilise les outils pour agir sur l'ordinateur plutôt que d'expliquer comment faire.",
     "Si la demande est ambiguë, pose la question avec ask_user.",
     `Date et heure actuelles : ${now}.`,
-  ].join("\n");
+    memoryPrompt(),
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function friendlyError(e: unknown): Error {

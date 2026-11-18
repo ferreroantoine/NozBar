@@ -1,6 +1,7 @@
 // Pilote Claude Code : l'expert passe par l'abonnement Claude de l'utilisateur (binaire officiel `claude -p`).
 
 import { native } from "../native";
+import { memoryPrompt } from "../settings";
 import type { Ui } from "../tools";
 import { parseLine, toolActivity } from "./claude-code-stream";
 
@@ -52,8 +53,11 @@ export class ClaudeCodeProvider {
 
   /** `context` (l'échange déjà mené par Gemini) n'accompagne que le premier message de la session. */
   async send(text: string, ui: Ui, signal: AbortSignal, context?: string): Promise<string> {
-    const prompt =
+    let prompt =
       context && !this.sessionId ? `Échange précédent avec l'assistant rapide :\n${context}\n\nDemande actuelle : ${text}` : text;
+    // Les souvenirs accompagnent le premier message : la session les garde ensuite.
+    const memories = memoryPrompt();
+    if (memories && !this.sessionId) prompt = `${memories}\n\n${prompt}`;
     let answer = "";
     let result: Result | null = null;
     let onResult: () => void = () => {};
