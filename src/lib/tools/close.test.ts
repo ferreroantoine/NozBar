@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../native", () => ({ native: { resolveClose: vi.fn(), closeApp: vi.fn(async () => 2) } }));
+vi.mock("../native", () => ({
+  native: {
+    resolveClose: vi.fn(),
+    closeApp: vi.fn(async () => ({ windows: 2, background: false })),
+    resolveTab: vi.fn(async () => ({ kind: "nothing" })),
+    closeTab: vi.fn(async () => {}),
+  },
+}));
 
 import { native } from "../native";
 import { matchLocal } from "../router";
@@ -34,6 +41,13 @@ describe("close_app", () => {
     expect(result).toMatchObject({ ok: true, message: "brave est fermé" });
   });
 
+  it("dit la vérité quand l'application restait en arrière-plan", async () => {
+    vi.mocked(native.resolveClose).mockResolvedValue({ kind: "open", candidates: brave });
+    vi.mocked(native.closeApp).mockResolvedValueOnce({ windows: 1, background: true });
+    const result = await CLOSE_TOOL.run({ name: "brave" }, context().ctx);
+    expect(result.message).toBe("brave est fermé (il tournait encore en arrière-plan, je l'ai arrêté)");
+  });
+
   it("demande confirmation quand c'est Claude qui veut fermer une application", async () => {
     vi.mocked(native.resolveClose).mockResolvedValue({ kind: "open", candidates: brave });
     const { ctx } = context();
@@ -59,6 +73,16 @@ describe("close_app", () => {
     expect(native.closeApp).not.toHaveBeenCalled();
   });
 
+  it("ferme l'onglet quand le nom désigne une page et non une application", async () => {
+    vi.mocked(native.resolveClose).mockResolvedValue({ kind: "nothing" });
+    const youtube = { label: "YouTube", kind: "tab", target: "42:1:YouTube", detail: "Brave" } as const;
+    vi.mocked(native.resolveTab).mockResolvedValueOnce({ kind: "open", candidates: youtube }).mockResolvedValueOnce({ kind: "open", candidates: youtube });
+    const result = await CLOSE_TOOL.run({ name: "YouTube" }, context().ctx);
+    expect(native.closeTab).toHaveBeenCalledWith("42:1:YouTube");
+    expect(native.closeApp).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, message: "Onglet « YouTube » fermé" });
+  });
+
   it("signale quand aucune application ouverte ne correspond", async () => {
     vi.mocked(native.resolveClose).mockResolvedValue({ kind: "nothing" });
     const result = await CLOSE_TOOL.run({ name: "photoshop" }, context().ctx);
@@ -72,5 +96,7 @@ describe("routeur « ferme »", () => {
     expect(matchLocal("ferme brave")).toMatchObject({ kind: "tool", name: "close_app", args: { name: "brave" } });
     expect(matchLocal("quitte la calculatrice")).toMatchObject({ name: "close_app", args: { name: "calculatrice" } });
     expect(matchLocal("ferme la fenêtre de spotify")).toMatchObject({ args: { name: "spotify" } });
+    expect(matchLocal("ferme l'onglet YouTube")).toMatchObject({ name: "close_tab", args: { name: "youtube" } });
+    expect(matchLocal("ferme la page de Gmail")).toMatchObject({ name: "close_tab", args: { name: "gmail" } });
   });
 });

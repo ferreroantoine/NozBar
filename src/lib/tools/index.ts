@@ -2,18 +2,37 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import type { FunctionDeclaration } from "@google/genai";
+import { BROWSER_TOOLS } from "./browser";
 import { CLOSE_TOOL } from "./close";
+import { DEVICE_TOOLS } from "./device";
 import { DIALOG_TOOLS } from "./dialog";
 import { EXPERT_TOOL } from "./expert";
 import { FILE_TOOLS } from "./files";
-import { OPEN_TOOL } from "./open";
+import { MEMORY_TOOLS } from "./memory";
+import { GAME_TOOL, OPEN_TOOL } from "./open";
+import { SCREEN_TOOLS } from "./screen";
 import { SYSTEM_TOOLS } from "./system";
 import { errorMessage, type Args, type Tool, type ToolContext, type ToolResult } from "./types";
 import { WEATHER_TOOL } from "./weather";
+import { WINDOW_TOOLS } from "./windows";
 
 export * from "./types";
 
-export const TOOLS: Tool[] = [OPEN_TOOL, CLOSE_TOOL, ...SYSTEM_TOOLS, ...FILE_TOOLS, WEATHER_TOOL, ...DIALOG_TOOLS, EXPERT_TOOL];
+export const TOOLS: Tool[] = [
+  OPEN_TOOL,
+  CLOSE_TOOL,
+  GAME_TOOL,
+  ...BROWSER_TOOLS,
+  ...WINDOW_TOOLS,
+  ...SCREEN_TOOLS,
+  ...SYSTEM_TOOLS,
+  ...DEVICE_TOOLS,
+  ...FILE_TOOLS,
+  WEATHER_TOOL,
+  ...DIALOG_TOOLS,
+  ...MEMORY_TOOLS,
+  EXPERT_TOOL,
+];
 
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 

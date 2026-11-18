@@ -3,15 +3,47 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Settings } from "./settings";
 
-export type Provider = "gemini" | "anthropic";
+export type Provider = "gemini" | "anthropic" | "groq";
 
 export interface OpenCandidate {
   label: string;
-  kind: "app" | "file";
-  /** Identifiant d'application ou chemin complet. */
+  kind: "app" | "file" | "tab" | "audio" | "game";
+  /** Identifiant d'application, chemin complet, onglet, sortie audio ou jeu Steam. */
   target: string;
   detail: string;
 }
+
+export interface Page {
+  browser: string;
+  title: string;
+  url: string;
+  text: string;
+}
+
+export interface ProcessUsage {
+  name: string;
+  cpu: number;
+  memory_mb: number;
+}
+
+export interface SystemStatus {
+  cpu: number;
+  memoryUsedGb: number;
+  memoryTotalGb: number;
+  byCpu: ProcessUsage[];
+  byMemory: ProcessUsage[];
+  battery: { percent: number; charging: boolean } | null;
+}
+
+export interface NowPlaying {
+  title: string;
+  artist: string;
+  app: string;
+  playing: boolean;
+}
+
+export type WindowAction = "focus" | "minimize" | "maximize" | "restore" | "left" | "right" | "next_screen";
+export type PowerAction = "lock" | "sleep" | "shutdown" | "restart";
 
 export type OpenResolution =
   | { kind: "open"; candidates: OpenCandidate }
@@ -36,7 +68,10 @@ export const native = {
   resolveOpen: (query: string) => invoke<OpenResolution>("resolve_open", { query }),
   launchApp: (appId: string) => invoke<void>("launch_app", { appId }),
   resolveClose: (query: string) => invoke<OpenResolution>("resolve_close", { query }),
-  closeApp: (target: string) => invoke<number>("close_app", { target }),
+  /** `background` : l'application restait en arrière-plan sans fenêtre, elle a été arrêtée. */
+  closeApp: (target: string) => invoke<{ windows: number; background: boolean }>("close_app", { target }),
+  /** Noms d'applications ouvertes et installées, pour que la transcription vocale les écrive juste. */
+  speechHints: () => invoke<string[]>("speech_hints"),
   findFiles: (query: string, kind?: string) => invoke<FoundFile[]>("find_files", { query, kind: kind ?? null }),
   checkFile: (path: string) => invoke<{ name: string; needsConfirmation: boolean; inClaudeWorkspace: boolean }>("check_file", { path }),
   openFile: (path: string, confirmed: boolean) => invoke<void>("open_file", { path, confirmed }),
@@ -63,4 +98,36 @@ export const native = {
     invoke<number>("set_volume", { level: level ?? null, delta: delta ?? null }),
   setTimer: (seconds: number, title: string, body: string) =>
     invoke<void>("set_timer", { seconds, title, body }),
+
+  resolveTab: (query: string) => invoke<OpenResolution>("resolve_tab", { query }),
+  listTabs: () => invoke<OpenCandidate[]>("list_tabs"),
+  switchTab: (target: string) => invoke<void>("switch_tab", { target }),
+  closeTab: (target: string) => invoke<void>("close_tab", { target }),
+  /** Page affichée dans le navigateur que l'utilisateur regardait. */
+  readPage: () => invoke<Page>("read_page"),
+  defaultBrowser: () => invoke<string | null>("default_browser"),
+  windowAction: (target: string, action: WindowAction) => invoke<void>("window_action", { target, action }),
+  showDesktop: () => invoke<void>("show_desktop"),
+  /** Texte sélectionné dans la fenêtre que l'utilisateur regardait avant d'ouvrir la bulle. */
+  getSelection: () => invoke<string>("get_selection"),
+  readClipboard: () => invoke<string>("read_clipboard"),
+  writeClipboard: (text: string) => invoke<void>("write_clipboard", { text }),
+  /** Capture de l'écran que l'utilisateur regardait, sans la bulle (JPEG en base64). */
+  captureScreen: () => invoke<string>("capture_screen"),
+  audioOutputs: () => invoke<{ name: string; id: string; default: boolean }[]>("audio_outputs"),
+  resolveAudioOutput: (query: string) => invoke<OpenResolution>("resolve_audio_output", { query }),
+  setAudioOutput: (id: string) => invoke<void>("set_audio_output", { id }),
+  /** Renvoie vrai si le micro est maintenant coupé ; sans `muted`, bascule. */
+  setMicrophone: (muted?: boolean) => invoke<boolean>("set_microphone", { muted: muted ?? null }),
+  setBrightness: (level?: number, delta?: number) =>
+    invoke<number>("set_brightness", { level: level ?? null, delta: delta ?? null }),
+  /** Renvoie vrai si le mode sombre est maintenant actif. */
+  setDarkMode: (mode: "dark" | "light" | "toggle") => invoke<boolean>("set_dark_mode", { mode }),
+  power: (action: PowerAction) => invoke<void>("power_action", { action }),
+  systemStatus: () => invoke<SystemStatus>("system_status"),
+  nowPlaying: () => invoke<NowPlaying | null>("now_playing"),
+  resolveGame: (query: string) => invoke<OpenResolution>("resolve_game", { query }),
+  launchGame: (appId: string) => invoke<void>("launch_game", { appId }),
+  getAutostart: () => invoke<boolean>("get_autostart"),
+  setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
 };

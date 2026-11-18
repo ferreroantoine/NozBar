@@ -132,4 +132,56 @@ export const SYSTEM_TOOLS: Tool[] = [
       return { ok: true, message: `Minuteur réglé : ${formatDuration(seconds)}` };
     },
   },
+
+  {
+    name: "set_reminder",
+    description:
+      "Programme un rappel à une heure précise dans les prochaines 24 h (« rappelle-moi d'appeler Paul à 18 h »). " +
+      "Une notification Windows apparaîtra à l'heure dite. Pour une durée (« dans 10 minutes »), utilise set_timer.",
+    parameters: {
+      type: "object",
+      properties: {
+        time: { type: "string", description: "Heure au format HH:MM (24 h), ex. « 18:00 »" },
+        text: { type: "string", description: "Ce qu'il faut rappeler, ex. « Appeler Paul »" },
+      },
+      required: ["time", "text"],
+    },
+    status: (a) => `Rappel à ${str(a.time)}…`,
+    async run(a) {
+      const at = reminderTime(str(a.time), new Date());
+      if (!at) return { ok: false, message: `Heure invalide : « ${str(a.time)} » (format HH:MM attendu)` };
+      const seconds = Math.max(1, Math.round((at.getTime() - Date.now()) / 1000));
+      const text = str(a.text) || "Rappel";
+      await native.setTimer(seconds, "Rappel", text);
+      const when = at.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+      const day = at.getDate() === new Date().getDate() ? "" : " demain";
+      return { ok: true, message: `Je te le rappellerai${day} à ${when.replace(":", " h ")}` };
+    },
+  },
+
+  {
+    name: "now_playing",
+    description: "Dit quelle musique ou vidéo est en cours de lecture (« c'est quoi cette musique ? »).",
+    parameters: { type: "object", properties: {} },
+    status: () => "Écoute en cours…",
+    async run() {
+      const media = await native.nowPlaying();
+      if (!media || !media.title) return { ok: true, message: "Rien n'est en cours de lecture" };
+      const who = media.artist ? ` de ${media.artist}` : "";
+      const state = media.playing ? "" : " (en pause)";
+      return { ok: true, message: `« ${media.title} »${who}${state}`, data: { ...media } };
+    },
+  },
 ];
+
+/** Prochaine occurrence de « HH:MM » (ou « 18h30 ») : aujourd'hui, ou demain si l'heure est passée. */
+export function reminderTime(raw: string, now: Date): Date | null {
+  const match = /^(\d{1,2})\s*(?:h|:)\s*(\d{2})?$/i.exec(raw.trim());
+  if (!match) return null;
+  const [hours, minutes] = [Number(match[1]), Number(match[2] ?? 0)];
+  if (hours > 23 || minutes > 59) return null;
+  const at = new Date(now);
+  at.setHours(hours, minutes, 0, 0);
+  if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1);
+  return at;
+}

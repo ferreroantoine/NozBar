@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../native", () => ({
-  native: { resolveOpen: vi.fn(), launchApp: vi.fn(async () => {}), checkFile: vi.fn(), openFile: vi.fn(async () => {}), setSettings: vi.fn(async () => {}) },
+  native: {
+    resolveOpen: vi.fn(),
+    launchApp: vi.fn(async () => {}),
+    checkFile: vi.fn(),
+    openFile: vi.fn(async () => {}),
+    setSettings: vi.fn(async () => {}),
+    resolveGame: vi.fn(async () => ({ kind: "nothing" })),
+    launchGame: vi.fn(async () => {}),
+  },
 }));
 
 import { native } from "../native";
@@ -80,6 +88,15 @@ describe("open_app", () => {
     const result = await OPEN_TOOL.run({ name: "photoshop" }, context().ctx);
     expect(result).toMatchObject({ ok: false });
     expect(result.message).toContain("photoshop");
+  });
+
+  it("lance un jeu Steam qui n'a pas de raccourci dans le menu Démarrer", async () => {
+    vi.mocked(native.resolveOpen).mockResolvedValue({ kind: "nothing" });
+    const rocket = { label: "Rocket League", kind: "game", target: "252950", detail: "jeu Steam" } as const;
+    vi.mocked(native.resolveGame).mockResolvedValue({ kind: "open", candidates: rocket });
+    const result = await OPEN_TOOL.run({ name: "rocket league" }, context().ctx);
+    expect(native.launchGame).toHaveBeenCalledWith("252950");
+    expect(result).toMatchObject({ ok: true, message: "Rocket League se lance" });
   });
 });
 
