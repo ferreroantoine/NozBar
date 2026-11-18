@@ -79,8 +79,34 @@ export class Recorder {
   }
 }
 
+const FRAME_SECONDS = 0.02;
+/** En dessous, c'est du silence quel que soit le bruit de fond (≈ -40 dBFS). */
+const MIN_SPEECH_RMS = 0.01;
+/** Une trame parlée dépasse nettement le bruit de fond de l'enregistrement. */
+const NOISE_FLOOR_RATIO = 4;
+/** Plafond du seuil : si l'on parle sans pause, le « bruit de fond » mesuré est la voix elle-même. */
+const MAX_SPEECH_RMS = 0.03;
+
+/**
+ * Durée parlée de l'enregistrement, en secondes : les trames nettement plus fortes que le bruit de fond.
+ * Sans parole, on n'envoie rien à l'IA : sur un silence, elle invente une commande (« lance OBS »).
+ */
+export function speechSeconds(pcm: Float32Array, rate: number): number {
+  const size = Math.max(1, Math.round(rate * FRAME_SECONDS));
+  const levels: number[] = [];
+  for (let start = 0; start + size <= pcm.length; start += size) {
+    let sum = 0;
+    for (let i = start; i < start + size; i++) sum += pcm[i] * pcm[i];
+    levels.push(Math.sqrt(sum / size));
+  }
+  if (!levels.length) return 0;
+  const floor = [...levels].sort((a, b) => a - b)[Math.floor(levels.length * 0.2)];
+  const threshold = Math.min(MAX_SPEECH_RMS, Math.max(MIN_SPEECH_RMS, floor * NOISE_FLOOR_RATIO));
+  return levels.filter((l) => l > threshold).length * FRAME_SECONDS;
+}
+
 /** Convertit l'enregistrement (webm/opus) en WAV 16 kHz mono, format accepté par Gemini. */
-export async function toWavBase64(blob: Blob): Promise<{ data: string; seconds: number }> {
+export async function toWavBase64(blob: Blob): Promise<{ data: string; seconds: number; speech: number }> {
   const decoder = new AudioContext();
   let decoded: AudioBuffer;
   try {
@@ -94,7 +120,11 @@ export async function toWavBase64(blob: Blob): Promise<{ data: string; seconds: 
   source.connect(offline.destination);
   source.start();
   const pcm = (await offline.startRendering()).getChannelData(0);
-  return { data: bytesToBase64(encodeWav(pcm, TARGET_RATE)), seconds: decoded.duration };
+  return {
+    data: bytesToBase64(encodeWav(pcm, TARGET_RATE)),
+    seconds: decoded.duration,
+    speech: speechSeconds(pcm, TARGET_RATE),
+  };
 }
 
 function encodeWav(pcm: Float32Array, rate: number): Uint8Array {

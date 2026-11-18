@@ -7,7 +7,7 @@ export interface GeminiLike {
   send(text: string, ui: Ui, signal: AbortSignal, canHandoff: boolean): Promise<GeminiReply>;
   reset(): void;
   search(query: string, signal: AbortSignal): Promise<{ summary: string; sources: Source[] }>;
-  transcribe(wavBase64: string, signal: AbortSignal): Promise<string>;
+  transcribe(wavBase64: string, signal: AbortSignal, hints?: string[]): Promise<string>;
 }
 
 export interface ClaudeLike {
@@ -42,8 +42,8 @@ export class Conversation {
     return this.gemini.search(query, signal);
   }
 
-  transcribe(wavBase64: string, signal: AbortSignal) {
-    return this.gemini.transcribe(wavBase64, signal);
+  transcribe(wavBase64: string, signal: AbortSignal, hints: string[] = []) {
+    return this.gemini.transcribe(wavBase64, signal, hints);
   }
 
   /** C'est Gemini qui décide seul de passer la main, et à quel modèle. */

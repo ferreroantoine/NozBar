@@ -9,7 +9,7 @@ vi.mock("../tools", async (importOriginal) => ({
 
 import type { GoogleGenAI, Part } from "@google/genai";
 import { executeTool, type Ui } from "../tools";
-import { GeminiProvider } from "./gemini";
+import { GeminiProvider, transcriptionPrompt } from "./gemini";
 
 /** Client simulé : chaque appel rejoue la liste de parts suivante, en un seul morceau de flux. */
 function fakeAi(responses: Part[][]) {
@@ -87,5 +87,14 @@ describe("GeminiProvider", () => {
     await gemini.send("Autre", ui, signal, true);
     const contents = (generateContentStream.mock.calls[1] as unknown as [{ contents: unknown[] }])[0].contents;
     expect(contents).toHaveLength(1);
+  });
+});
+
+describe("transcriptionPrompt", () => {
+  it("donne à Gemini les noms d'applications à reconnaître", () => {
+    const prompt = transcriptionPrompt(["Steam", "steamwebhelper", "Spotify"]);
+    expect(prompt).toContain("Steam, steamwebhelper, Spotify");
+    expect(prompt).toContain("<vide>");
+    expect(transcriptionPrompt([])).not.toContain("Noms qu'il peut citer");
   });
 });

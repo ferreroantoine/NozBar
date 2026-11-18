@@ -1,7 +1,9 @@
 // Fournisseur Gemini : conversation en streaming avec boucle d'outils, recherche web, transcription.
 
 import { GoogleGenAI, type Content, type FunctionCall, type Part } from "@google/genai";
+import { memoryPrompt } from "../settings";
 import { executeTool, geminiDeclarations, toolStatus, type Source, type ToolContext, type Ui } from "../tools";
+import { defaultBrowser } from "../tools/browser";
 
 /**
  * Alias qui suivent les derniers modèles. Flash-Lite répond en moins d'une seconde ;
@@ -88,8 +90,40 @@ function systemPrompt(): string {
       "dans Photoshop »), code, rédaction (mail, résumé, texte), calculs ou raisonnements en plusieurs étapes, " +
       "recherches à synthétiser, tâches à plusieurs actions (télécharger, organiser des fichiers), ou si tu n'es pas " +
       "sûr de ta réponse ou que ta tentative a échoué.",
+    "Quand l'utilisateur te demande de te souvenir de quelque chose, utilise remember ; d'oublier, forget.",
+    `Navigateur de l'utilisateur : ${defaultBrowser ?? "inconnu"}. Pour une page, un site ou un onglet (« ferme ` +
+      "YouTube », « va sur Gmail », « résume cette page »), utilise close_tab, switch_tab ou read_page : " +
+      "close_app fermerait tout le navigateur.",
+    "« Ça », « ce texte », « ce mail » désignent souvent la sélection : get_selection (sinon read_clipboard). " +
+      "Pour ce qui s'affiche à l'écran, utilise look_at_screen.",
     `Date et heure actuelles : ${now}.`,
-  ].join("\n");
+    memoryPrompt(),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Consigne de transcription ; `hints` : noms d'applications et souvenirs que l'audio cite peut-être. */
+export function transcriptionPrompt(hints: string[]): string {
+  const lines = [
+    "Ce message vocal est une commande donnée à NozBar, un assistant vocal pour Windows (ouvrir ou fermer une " +
+      "application, régler le volume, chercher un fichier, poser une question…). L'utilisateur parle souvent vite " +
+      "et articule peu.",
+    "Transcris fidèlement ce qui est réellement dit, en français sauf s'il est dans une autre langue. " +
+      "N'invente jamais rien : n'écris que des mots effectivement prononcés.",
+  ];
+  if (hints.length) {
+    lines.push(
+      "Noms qu'il peut citer (applications ouvertes ou installées, termes qu'il utilise). Ils servent seulement à " +
+        "bien orthographier un nom réellement prononcé ; ne les écris jamais s'ils ne sont pas dits :",
+      hints.join(", "),
+    );
+  }
+  lines.push(
+    "Réponds uniquement avec la transcription, sans guillemets ni commentaire. " +
+      "S'il n'y a aucune parole distincte (silence, souffle, bruit, musique), réponds exactement : <vide>",
+  );
+  return lines.join("\n");
 }
 
 /** Réponse de Gemini, ou demande de passage de main à l'expert. */
@@ -225,25 +259,40 @@ export class GeminiProvider {
     return { summary: res.text ?? "", sources };
   }
 
-  /** Transcrit un message vocal (WAV 16 kHz en base64). */
-  async transcribe(wavBase64: string, signal: AbortSignal): Promise<string> {
+  /** Répond à une question sur une capture d'écran (JPEG en base64). */
+  async describeImage(jpegBase64: string, question: string, signal: AbortSignal): Promise<string> {
     const res = await withRetry((model, attemptSignal) => this.ai.models.generateContent({
       model,
       contents: [
         {
           role: "user",
           parts: [
-            { inlineData: { mimeType: "audio/wav", data: wavBase64 } },
+            { inlineData: { mimeType: "image/jpeg", data: jpegBase64 } },
             {
               text:
-                "Transcris mot pour mot ce message vocal (en français, sauf s'il est dans une autre langue). " +
-                "Réponds uniquement avec la transcription, sans guillemets ni commentaire. " +
-                "S'il n'y a aucune parole, réponds exactement : <vide>",
+                "Voici une capture de l'écran de l'utilisateur (Windows). Réponds en français, précisément et " +
+                `brièvement, en citant les textes visibles utiles (messages d'erreur, boutons…). Question : ${question}`,
             },
           ],
         },
       ],
       config: { abortSignal: attemptSignal },
+    }), signal);
+    return (res.text ?? "").trim() || "Je n'arrive pas à décrire l'écran.";
+  }
+
+  /** Transcrit un message vocal (WAV 16 kHz en base64) ; `hints` aide à écrire les noms propres. */
+  async transcribe(wavBase64: string, signal: AbortSignal, hints: string[] = []): Promise<string> {
+    const res = await withRetry((model, attemptSignal) => this.ai.models.generateContent({
+      model,
+      contents: [
+        {
+          role: "user",
+          parts: [{ inlineData: { mimeType: "audio/wav", data: wavBase64 } }, { text: transcriptionPrompt(hints) }],
+        },
+      ],
+      // Température nulle : la transcription la plus probable, pas une variante « créative ».
+      config: { abortSignal: attemptSignal, temperature: 0 },
     }), signal);
     const text = (res.text ?? "").trim();
     return text === "<vide>" ? "" : text;
