@@ -1,14 +1,22 @@
 mod apps;
+mod autostart;
+mod browser;
 mod claude_code;
+mod devices;
 mod files;
 mod fuzzy;
 mod location;
 mod mcp;
+mod power;
+mod registry;
 mod resolver;
 mod running_apps;
+mod screen;
 mod secrets;
 mod settings;
+mod steam;
 mod system;
+mod window_control;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -24,8 +32,14 @@ use apps::AppIndex;
 
 /// Au-delà de ce délai, un appui maintenu sur le raccourci passe en push-to-talk.
 const PTT_DELAY: Duration = Duration::from_millis(280);
-/// Position verticale de la bulle, en fraction de la hauteur du moniteur.
-const BUBBLE_TOP_RATIO: f64 = 0.18;
+/// Les deux raccourcis possibles (Alt+Espace, Ctrl+Alt+Espace) finissent par Espace.
+const SHORTCUT_KEY: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY =
+    windows::Win32::UI::Input::KeyboardAndMouse::VK_SPACE;
+const KEY_POLL: Duration = Duration::from_millis(20);
+/// Assez fréquent pour ne rater aucun clic, assez rare pour ne rien coûter.
+const OUTSIDE_POLL: Duration = Duration::from_millis(25);
+/// Assez pour un menu Démarrer bien rempli, sans alourdir chaque transcription.
+const SPEECH_HINTS_MAX: usize = 400;
 
 #[derive(Default)]
 struct HotkeyState {
@@ -39,6 +53,8 @@ struct HotkeyState {
 struct AppState {
     hotkey: Mutex<HotkeyState>,
     shortcut_label: Mutex<String>,
+    /// Fenêtre au premier plan juste avant l'ouverture de la bulle : celle que l'utilisateur regardait.
+    previous_window: Mutex<isize>,
 }
 
 fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -47,16 +63,58 @@ fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
 
 /// Place la bulle sur le moniteur du curseur, centrée horizontalement, puis l'affiche.
 fn show_bubble(win: &WebviewWindow) {
+    remember_previous_window(win);
     if let Ok(cursor) = win.cursor_position() {
         if let (Ok(Some(monitor)), Ok(size)) = (win.monitor_from_point(cursor.x, cursor.y), win.outer_size()) {
             let (mp, ms) = (monitor.position(), monitor.size());
             let x = mp.x + (ms.width as i32 - size.width as i32) / 2;
-            let y = mp.y + (ms.height as f64 * BUBBLE_TOP_RATIO) as i32;
-            let _ = win.set_position(PhysicalPosition::new(x, y));
+            // En haut de l'écran : la marge de 14 px vient de la page (.stage).
+            let _ = win.set_position(PhysicalPosition::new(x, mp.y));
         }
     }
     let _ = win.show();
     let _ = win.set_focus();
+    watch_outside(win);
+}
+
+/// Windows refuse souvent le focus à la bulle quand elle s'ouvre par-dessus une autre application :
+/// elle ne le « perd » alors jamais, et ni un clic ailleurs ni Échap ne la fermaient. Tant qu'elle est
+/// affichée, on surveille donc nous-mêmes les clics hors de la bulle, et Échap quand elle n'a pas le focus
+/// (avec le focus, la page gère Échap elle-même : elle annule d'abord une question en cours).
+fn watch_outside(win: &WebviewWindow) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use windows::Win32::Foundation::{HWND, POINT, RECT};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON};
+    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetForegroundWindow, GetWindowRect};
+
+    static WATCHING: AtomicBool = AtomicBool::new(false);
+    if WATCHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let win = win.clone();
+    std::thread::spawn(move || {
+        let (mut mouse_was_down, mut escape_was_down) = (true, true);
+        while win.is_visible().unwrap_or(false) {
+            let Ok(handle) = win.hwnd() else { break };
+            let hwnd = HWND(handle.0 as _);
+            let mouse = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].into_iter().any(system::key_down);
+            let escape = system::key_down(VK_ESCAPE);
+            if mouse && !mouse_was_down {
+                let (mut cursor, mut rect) = (POINT::default(), RECT::default());
+                let outside = unsafe { GetCursorPos(&mut cursor).is_ok() && GetWindowRect(hwnd, &mut rect).is_ok() }
+                    && (cursor.x < rect.left || cursor.x >= rect.right || cursor.y < rect.top || cursor.y >= rect.bottom);
+                if outside {
+                    let _ = win.emit("bubble:outside", ());
+                }
+            }
+            if escape && !escape_was_down && unsafe { GetForegroundWindow() } != hwnd {
+                let _ = win.emit("bubble:escape", ());
+            }
+            (mouse_was_down, escape_was_down) = (mouse, escape);
+            std::thread::sleep(OUTSIDE_POLL);
+        }
+        WATCHING.store(false, Ordering::SeqCst);
+    });
 }
 
 fn on_shortcut_pressed(app: &AppHandle) {
@@ -79,26 +137,46 @@ fn on_shortcut_pressed(app: &AppHandle) {
         show_bubble(&win);
         let _ = app.emit("bubble:open", ());
     }
+    // Le micro s'ouvre dès l'appui : sinon les premiers mots, dits pendant le délai, seraient perdus.
+    let _ = app.emit("ptt:prime", ());
 
+    // L'événement « relâché » du raccourci global n'arrive pas toujours (Alt lâché avant Espace…) :
+    // on surveille aussi la touche elle-même, ce qui garantit la fin de l'écoute.
     let app = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(PTT_DELAY);
-        let state = app.state::<AppState>();
-        let mut hk = state.hotkey.lock().unwrap();
-        if hk.pressed && hk.press_id == id {
-            hk.ptt = true;
-            drop(hk);
-            if let Some(win) = main_window(&app) {
-                let _ = win.set_focus();
+        let start = std::time::Instant::now();
+        loop {
+            std::thread::sleep(KEY_POLL);
+            if !system::key_down(SHORTCUT_KEY) {
+                on_shortcut_released(&app);
+                return;
             }
-            let _ = app.emit("ptt:start", ());
+            let state = app.state::<AppState>();
+            let mut hk = state.hotkey.lock().unwrap();
+            if !hk.pressed || hk.press_id != id {
+                return; // déjà relâché par l'événement du raccourci
+            }
+            // Vérifié et marqué sous le même verrou : un relâchement arrivé entre les deux
+            // laisserait sinon l'écoute démarrer sans que personne ne l'arrête.
+            if !hk.ptt && start.elapsed() >= PTT_DELAY {
+                hk.ptt = true;
+                drop(hk);
+                if let Some(win) = main_window(&app) {
+                    let _ = win.set_focus();
+                }
+                let _ = app.emit("ptt:start", ());
+            }
         }
     });
 }
 
+/// Appelé par l'événement du raccourci et par la surveillance de la touche : seul le premier compte.
 fn on_shortcut_released(app: &AppHandle) {
     let state = app.state::<AppState>();
     let mut hk = state.hotkey.lock().unwrap();
+    if !hk.pressed {
+        return;
+    }
     hk.pressed = false;
     if hk.ptt {
         hk.ptt = false;
@@ -108,6 +186,10 @@ fn on_shortcut_released(app: &AppHandle) {
         // Appui court alors que la bulle était ouverte : on la referme.
         drop(hk);
         let _ = app.emit("bubble:close", ());
+    } else {
+        // Appui court qui vient d'ouvrir la bulle : le micro ouvert par précaution se referme.
+        drop(hk);
+        let _ = app.emit("ptt:cancel", ());
     }
 }
 
@@ -124,6 +206,45 @@ fn register_shortcut(app: &AppHandle) -> Result<String, String> {
         }
     }
     Err(errors.join("; "))
+}
+
+fn remember_previous_window(win: &WebviewWindow) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    let hwnd = unsafe { GetForegroundWindow() };
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    // La bulle ou les paramètres de NozBar ne comptent pas.
+    if !hwnd.is_invalid() && pid != std::process::id() {
+        *win.state::<AppState>().previous_window.lock().unwrap() = hwnd.0 as isize;
+    }
+}
+
+fn previous_window(state: &AppState) -> windows::Win32::Foundation::HWND {
+    windows::Win32::Foundation::HWND(*state.previous_window.lock().unwrap() as _)
+}
+
+/// Alt+Espace est aussi le raccourci Windows du menu système de la fenêtre active. Pendant un appui long,
+/// la répétition d'Espace (ou le relâchement d'Alt) atteint la bulle, qui ouvrait ce menu — invisible,
+/// la bulle n'ayant pas de barre de titre — et restait figée jusqu'à la touche suivante : l'écoute ne
+/// s'arrêtait plus. On ignore donc toute ouverture de menu au clavier sur la bulle.
+#[cfg(windows)]
+fn block_system_menu(win: &WebviewWindow) {
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{SC_KEYMENU, WM_SYSCOMMAND};
+
+    unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
+        if msg == WM_SYSCOMMAND && (wparam.0 & 0xFFF0) as u32 == SC_KEYMENU {
+            return LRESULT(0);
+        }
+        DefSubclassProc(hwnd, msg, wparam, lparam)
+    }
+
+    if let Ok(handle) = win.hwnd() {
+        unsafe {
+            let _ = SetWindowSubclass(HWND(handle.0 as _), Some(proc), 1, 0);
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -341,9 +462,28 @@ async fn resolve_close(query: String) -> Result<resolver::Resolution, String> {
     tauri::async_runtime::spawn_blocking(move || running_apps::resolve(&query)).await.map_err(|e| e.to_string())
 }
 
+/// Peut attendre quelques secondes que l'application se termine : hors du thread principal.
 #[tauri::command]
-fn close_app(target: String) -> Result<usize, String> {
-    running_apps::close(&target)
+async fn close_app(target: String) -> Result<running_apps::Closed, String> {
+    tauri::async_runtime::spawn_blocking(move || running_apps::close(&target)).await.map_err(|e| e.to_string())?
+}
+
+/// Noms d'applications (ouvertes d'abord, puis installées) que la transcription vocale doit savoir écrire.
+#[tauri::command]
+async fn speech_hints(app: AppHandle) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let installed = app.state::<AppIndex>().entries().into_iter().map(|a| a.name);
+        let mut seen = std::collections::HashSet::new();
+        running_apps::open_names()
+            .into_iter()
+            .chain(installed)
+            .map(|n| n.trim().to_string())
+            .filter(|n| (2..=40).contains(&n.chars().count()) && seen.insert(n.to_lowercase()))
+            .take(SPEECH_HINTS_MAX)
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Seuls les identifiants de l'index sont acceptés : pas de `shell:` arbitraire.
@@ -358,6 +498,16 @@ fn launch_app(app_id: String, index: tauri::State<AppIndex>) -> Result<(), Strin
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     system::open_url(&url)
+}
+
+#[tauri::command]
+fn get_autostart() -> bool {
+    autostart::is_enabled()
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<(), String> {
+    autostart::set_enabled(enabled)
 }
 
 #[tauri::command]
@@ -385,6 +535,138 @@ fn set_timer(app: AppHandle, seconds: u64, title: String, body: String) -> Resul
         let _ = app.notification().builder().title(title).body(body).show();
     });
     Ok(())
+}
+
+// ---------- Navigateur, fenêtres, écran ----------
+
+/// UI Automation et les attentes de fermeture sont bloquantes : toujours hors du fil principal.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn resolve_tab(query: String) -> Result<resolver::Resolution, String> {
+    blocking(move || browser::resolve(&query)).await
+}
+
+#[tauri::command]
+async fn list_tabs() -> Result<Vec<resolver::Candidate>, String> {
+    blocking(browser::candidates).await
+}
+
+#[tauri::command]
+async fn switch_tab(target: String) -> Result<(), String> {
+    blocking(move || browser::switch_to(&target)).await?
+}
+
+#[tauri::command]
+async fn close_tab(target: String) -> Result<(), String> {
+    blocking(move || browser::close(&target)).await?
+}
+
+#[tauri::command]
+async fn read_page(app: AppHandle) -> Result<browser::Page, String> {
+    let looking_at = previous_window(&app.state::<AppState>()).0 as isize;
+    blocking(move || browser::read_page(windows::Win32::Foundation::HWND(looking_at as _))).await?
+}
+
+#[tauri::command]
+async fn default_browser() -> Result<Option<String>, String> {
+    blocking(browser::default_browser).await
+}
+
+#[tauri::command]
+async fn window_action(target: String, action: String) -> Result<(), String> {
+    blocking(move || window_control::act(&target, &action)).await?
+}
+
+#[tauri::command]
+fn show_desktop() -> Result<(), String> {
+    window_control::show_desktop()
+}
+
+#[tauri::command]
+async fn get_selection(app: AppHandle) -> Result<String, String> {
+    let window = previous_window(&app.state::<AppState>()).0 as isize;
+    blocking(move || screen::selection(windows::Win32::Foundation::HWND(window as _))).await?
+}
+
+#[tauri::command]
+fn read_clipboard() -> Result<String, String> {
+    screen::read_clipboard()
+}
+
+#[tauri::command]
+fn write_clipboard(text: String) -> Result<(), String> {
+    screen::write_clipboard(&text)
+}
+
+#[tauri::command]
+async fn capture_screen(app: AppHandle) -> Result<String, String> {
+    let around = previous_window(&app.state::<AppState>()).0 as isize;
+    let bubble = main_window(&app).and_then(|w| w.hwnd().ok()).map_or(0, |h| h.0 as isize);
+    blocking(move || {
+        use windows::Win32::Foundation::HWND;
+        screen::capture(HWND(around as _), HWND(bubble as _))
+    })
+    .await?
+}
+
+// ---------- Périphériques et système ----------
+
+#[tauri::command]
+async fn audio_outputs() -> Result<Vec<devices::AudioOutput>, String> {
+    blocking(devices::outputs).await?
+}
+
+#[tauri::command]
+async fn resolve_audio_output(query: String) -> Result<resolver::Resolution, String> {
+    blocking(move || devices::resolve_output(&query)).await?
+}
+
+#[tauri::command]
+async fn set_audio_output(id: String) -> Result<(), String> {
+    blocking(move || devices::set_output(&id)).await?
+}
+
+#[tauri::command]
+async fn set_microphone(muted: Option<bool>) -> Result<bool, String> {
+    blocking(move || devices::set_microphone_muted(muted)).await?
+}
+
+#[tauri::command]
+async fn set_brightness(level: Option<i32>, delta: Option<i32>) -> Result<u32, String> {
+    blocking(move || devices::set_brightness(level, delta)).await?
+}
+
+#[tauri::command]
+async fn set_dark_mode(mode: String) -> Result<bool, String> {
+    blocking(move || power::set_dark_mode(&mode)).await?
+}
+
+#[tauri::command]
+fn power_action(action: String) -> Result<(), String> {
+    power::power(&action)
+}
+
+#[tauri::command]
+async fn system_status() -> Result<power::Status, String> {
+    blocking(power::status).await?
+}
+
+#[tauri::command]
+async fn now_playing() -> Result<Option<system::NowPlaying>, String> {
+    blocking(system::now_playing).await?
+}
+
+#[tauri::command]
+async fn resolve_game(query: String) -> Result<resolver::Resolution, String> {
+    blocking(move || steam::resolve(&query)).await
+}
+
+#[tauri::command]
+async fn launch_game(app_id: String) -> Result<(), String> {
+    blocking(move || steam::launch(&app_id)).await?
 }
 
 pub fn run() {
@@ -445,6 +727,8 @@ pub fn run() {
             if let Some(win) = main_window(&handle) {
                 #[cfg(windows)]
                 hide_from_alt_tab(&win);
+                #[cfg(windows)]
+                block_system_menu(&win);
             }
 
             let open = MenuItem::with_id(app, "open", "Ouvrir NozBar", true, None::<&str>)?;
@@ -482,6 +766,7 @@ pub fn run() {
             launch_app,
             resolve_close,
             close_app,
+            speech_hints,
             find_files,
             check_file,
             open_file,
@@ -501,6 +786,31 @@ pub fn run() {
             media_control,
             set_volume,
             set_timer,
+            get_autostart,
+            set_autostart,
+            resolve_tab,
+            list_tabs,
+            switch_tab,
+            close_tab,
+            read_page,
+            default_browser,
+            window_action,
+            show_desktop,
+            get_selection,
+            read_clipboard,
+            write_clipboard,
+            capture_screen,
+            audio_outputs,
+            resolve_audio_output,
+            set_audio_output,
+            set_microphone,
+            set_brightness,
+            set_dark_mode,
+            power_action,
+            system_status,
+            now_playing,
+            resolve_game,
+            launch_game,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au démarrage de NozBar");

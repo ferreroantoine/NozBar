@@ -1,4 +1,4 @@
-//! Clés API (Gemini, Anthropic) stockées dans le Gestionnaire d'identification Windows.
+//! Clés API (Gemini, Anthropic, Groq) stockées dans le Gestionnaire d'identification Windows.
 
 const SERVICE: &str = "NozBar";
 
@@ -7,6 +7,7 @@ fn account(provider: &str) -> Result<&'static str, String> {
     match provider {
         "gemini" => Ok("gemini_api_key"),
         "anthropic" => Ok("anthropic_api_key"),
+        "groq" => Ok("groq_api_key"),
         _ => Err(format!("Fournisseur inconnu : {provider}")),
     }
 }
@@ -42,6 +43,7 @@ mod tests {
     fn keeps_the_existing_gemini_account() {
         assert_eq!(account("gemini").unwrap(), "gemini_api_key");
         assert_eq!(account("anthropic").unwrap(), "anthropic_api_key");
+        assert_eq!(account("groq").unwrap(), "groq_api_key");
         assert!(account("autre").is_err());
     }
 }

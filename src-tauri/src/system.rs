@@ -66,10 +66,14 @@ pub fn open_settings(page: &str) -> Result<(), String> {
 /// État de la souris et des touches de navigation, lu au moment où la bulle perd le focus.
 /// (bouton de souris enfoncé, touche Alt / Windows / Ctrl enfoncée)
 pub fn input_state() -> (bool, bool) {
-    let down = |vk: VIRTUAL_KEY| unsafe { (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0 };
-    let mouse = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].into_iter().any(down);
-    let keys = [VK_MENU, VK_LWIN, VK_RWIN, VK_CONTROL].into_iter().any(down);
+    let mouse = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].into_iter().any(key_down);
+    let keys = [VK_MENU, VK_LWIN, VK_RWIN, VK_CONTROL].into_iter().any(key_down);
     (mouse, keys)
+}
+
+/// La touche est-elle physiquement enfoncée en ce moment ?
+pub fn key_down(vk: VIRTUAL_KEY) -> bool {
+    unsafe { (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0 }
 }
 
 /// Windows refuse de rendre le premier plan à une fenêtre qui vient de le perdre. En rattachant
@@ -90,7 +94,8 @@ pub fn bring_to_front(hwnd: isize) {
     }
 }
 
-fn send_keys(keys: &[(VIRTUAL_KEY, bool)]) -> Result<(), String> {
+/// Touches à presser (`false`) ou relâcher (`true`), dans l'ordre.
+pub fn send_keys(keys: &[(VIRTUAL_KEY, bool)]) -> Result<(), String> {
     let inputs: Vec<INPUT> = keys
         .iter()
         .map(|&(vk, up)| INPUT {
@@ -129,6 +134,63 @@ pub fn media_control(action: &str) -> Result<(), String> {
         other => return Err(format!("Action média inconnue : {other}")),
     };
     tap_key(vk)
+}
+
+#[derive(serde::Serialize)]
+pub struct NowPlaying {
+    pub title: String,
+    pub artist: String,
+    pub app: String,
+    pub playing: bool,
+}
+
+/// Morceau ou vidéo en cours, tel que l'affiche le panneau multimédia de Windows.
+pub fn now_playing() -> Result<Option<NowPlaying>, String> {
+    use windows::Media::Control::{
+        GlobalSystemMediaTransportControlsSessionManager as Manager,
+        GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
+    };
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    }
+    let manager = Manager::RequestAsync().and_then(|op| op.get()).map_err(|e| e.to_string())?;
+    let Ok(session) = manager.GetCurrentSession() else { return Ok(None) };
+    let props = session.TryGetMediaPropertiesAsync().and_then(|op| op.get()).map_err(|e| e.to_string())?;
+    let playing = session
+        .GetPlaybackInfo()
+        .and_then(|info| info.PlaybackStatus())
+        .is_ok_and(|s| s == PlaybackStatus::Playing);
+    let app = session.SourceAppUserModelId().map(|s| s.to_string()).unwrap_or_default();
+    Ok(Some(NowPlaying {
+        title: props.Title().map(|s| s.to_string()).unwrap_or_default(),
+        artist: props.Artist().map(|s| s.to_string()).unwrap_or_default(),
+        app: app_label(&app),
+        playing,
+    }))
+}
+
+/// « Spotify.exe » → « Spotify », « Brave.W6ICIV3VR54SHUZ32O74UTISVY » → « Brave ».
+fn app_label(app_id: &str) -> String {
+    let name = app_id.rsplit(['\\', '!']).next().unwrap_or(app_id);
+    match name.rsplit_once('.') {
+        Some((stem, tail))
+            if tail.eq_ignore_ascii_case("exe")
+                || (tail.len() >= 10 && tail.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())) =>
+        {
+            stem.to_string()
+        }
+        _ => name.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn media_apps_get_readable_names() {
+        assert_eq!(super::app_label("Spotify.exe"), "Spotify");
+        assert_eq!(super::app_label("Brave.W6ICIV3VR54SHUZ32O74UTISVY"), "Brave");
+        assert_eq!(super::app_label("Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"), "Microsoft.ZuneMusic");
+    }
 }
 
 fn endpoint_volume() -> Result<IAudioEndpointVolume, String> {

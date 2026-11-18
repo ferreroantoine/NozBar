@@ -1,4 +1,4 @@
-//! Réglages de NozBar (permissions de Claude Code), enregistrés dans `settings.json`.
+//! Réglages de NozBar (permissions de Claude Code, souvenirs), enregistrés dans `settings.json`.
 //! Les clés API n'y sont jamais : elles restent dans le Gestionnaire d'identification.
 
 use std::path::Path;
@@ -41,6 +41,8 @@ impl Default for Permissions {
 #[serde(default)]
 pub struct Settings {
     pub permissions: Permissions,
+    /// Ce que l'utilisateur a demandé de retenir (« souviens-toi que… »), rappelé à chaque conversation.
+    pub memories: Vec<String>,
 }
 
 /// Fichier absent ou illisible : valeurs par défaut (jamais d'erreur au démarrage).

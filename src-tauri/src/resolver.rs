@@ -69,6 +69,12 @@ fn covers(words: &[String], key: &str) -> bool {
     !words.is_empty() && words.iter().all(|w| key.split(' ').any(|k| same_word(w, k)))
 }
 
+/// Candidats dont le nom contient chaque mot de la demande.
+pub fn full_matches(query: &str, list: &[Candidate]) -> Vec<Candidate> {
+    let words = query_words(query);
+    list.iter().filter(|c| covers(&words, &c.key)).take(MAX_CHOICES).cloned().collect()
+}
+
 fn top(mut list: Vec<(f64, Candidate)>) -> Vec<Candidate> {
     list.sort_by(|(a, _), (b, _)| b.partial_cmp(a).unwrap());
     list.into_iter().take(MAX_CHOICES).map(|(_, c)| c).collect()

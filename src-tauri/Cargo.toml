@@ -23,14 +23,21 @@ strsim = "0.11"
 deunicode = "1"
 tiny_http = "0.12"
 getrandom = "0.3"
+arboard = { version = "3", default-features = false }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+base64 = "0.22"
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 
 [target.'cfg(windows)'.dependencies]
+# Requis par la macro `windows::core::interface` (interface COM non documentée du panneau Son).
+windows-core = "0.61"
 windows = { version = "0.61", features = [
   "Devices_Geolocation",
   "Foundation",
   "Win32_Foundation",
   "Win32_Graphics_Dwm",
   "Win32_System_Threading",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
@@ -39,6 +46,18 @@ windows = { version = "0.61", features = [
   "Win32_System_Com",
   "Win32_System_Com_StructuredStorage",
   "Win32_System_Variant",
+  "Win32_System_Ole",
+  "Win32_UI_Accessibility",
+  "Win32_Graphics_Gdi",
+  "Win32_System_DataExchange",
+  "Win32_System_Power",
+  "Win32_System_Shutdown",
+  "Win32_Security",
+  "Win32_System_Registry",
+  "Win32_Devices_Display",
+  "Win32_Devices_FunctionDiscovery",
+  "Win32_UI_Shell_PropertiesSystem",
+  "Media_Control",
 ] }
 
 [profile.release]
