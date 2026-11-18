@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { native, type Provider } from "../lib/native";
 import { CATEGORIES, DEFAULT_SETTINGS, type Category, type Policy, type Settings } from "../lib/settings";
 import { errorMessage } from "../lib/tools";
+import { Orb } from "./Orb";
 
 const POLICIES: { value: Policy; label: string }[] = [
   { value: "always", label: "Toujours" },
@@ -149,7 +150,7 @@ function PermissionsSection() {
   }, []);
 
   async function change(key: Category, policy: Policy) {
-    const next = { permissions: { ...settings.permissions, [key]: policy } };
+    const next = { ...settings, permissions: { ...settings.permissions, [key]: policy } };
     setSettings(next);
     try {
       await native.setSettings(next);
@@ -197,16 +198,119 @@ function PermissionsSection() {
   );
 }
 
+function GeneralSection() {
+  const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    native.getAutostart().then(setAutostart, () => setAutostart(false));
+  }, []);
+
+  async function change(enabled: boolean) {
+    try {
+      await native.setAutostart(enabled);
+      setAutostart(enabled);
+      setNote("");
+    } catch (e) {
+      setNote(errorMessage(e));
+    }
+  }
+
+  return (
+    <section className="settings-section">
+      <h2>Général</h2>
+      <div className="settings-row settings-permission">
+        <div className="settings-label">
+          <strong>Lancer au démarrage</strong>
+          <span>NozBar s'ouvre en arrière-plan avec Windows, prêt sur Alt+Espace</span>
+        </div>
+        <div className="segmented" role="radiogroup" aria-label="Lancer au démarrage">
+          {[
+            { value: true, label: "Activé" },
+            { value: false, label: "Désactivé" },
+          ].map((o) => (
+            <button
+              key={o.label}
+              role="radio"
+              aria-checked={autostart === o.value}
+              className={autostart === o.value ? "is-active" : ""}
+              disabled={autostart === null}
+              onClick={() => void change(o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {note && <p className="settings-note">{note}</p>}
+    </section>
+  );
+}
+
+function MemoriesSection() {
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    native.getSettings().then(setSettings, (e) => setNote(errorMessage(e)));
+    // « Souviens-toi… » dit à la bulle pendant que la fenêtre est ouverte.
+    const unlisten = listen<Settings>("settings:changed", ({ payload }) => setSettings(payload));
+    return () => void unlisten.then((stop) => stop());
+  }, []);
+
+  async function forget(index: number) {
+    const next = { ...settings, memories: settings.memories.filter((_, i) => i !== index) };
+    setSettings(next);
+    try {
+      await native.setSettings(next);
+      setNote("");
+    } catch (e) {
+      setNote(errorMessage(e));
+    }
+  }
+
+  const memories = settings.memories ?? [];
+  return (
+    <section className="settings-section">
+      <h2>Mémoire</h2>
+      <p className="settings-intro">
+        Dites « souviens-toi que… » pour que NozBar retienne une préférence ou une astuce, et « oublie… » pour
+        la retirer.
+      </p>
+      {memories.length === 0 && <p className="settings-note">Aucun souvenir pour l'instant.</p>}
+      {memories.map((memory, i) => (
+        <div className="settings-row" key={`${i}-${memory}`}>
+          <div className="settings-label">
+            <span>{memory}</span>
+          </div>
+          <div className="settings-actions">
+            <button className="secondary" onClick={() => void forget(i)}>
+              Oublier
+            </button>
+          </div>
+        </div>
+      ))}
+      {note && <p className="settings-note">{note}</p>}
+    </section>
+  );
+}
+
 export function SettingsPage() {
   return (
     <main className="settings-page">
-      <h1>Paramètres de NozBar</h1>
+      <h1>
+        <Orb state="idle" size="md" />
+        Paramètres de NozBar
+      </h1>
+      <GeneralSection />
       <section className="settings-section">
         <h2>Comptes</h2>
         <KeyRow provider="gemini" title="Clé Gemini" hint="assistant rapide (obligatoire)" />
         <ClaudeRow />
         <KeyRow provider="anthropic" title="Clé API Claude" hint="secours si Claude Code n'est pas connecté (payant)" />
+        <KeyRow provider="groq" title="Clé Groq" hint="dictée vocale précise avec Whisper (gratuit, console.groq.com)" />
       </section>
+      <MemoriesSection />
       <PermissionsSection />
     </main>
   );

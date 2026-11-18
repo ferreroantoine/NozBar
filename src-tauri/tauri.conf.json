@@ -15,16 +15,15 @@
         "label": "main",
         "title": "NozBar",
         "width": 680,
-        "height": 76,
+        "height": 94,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "resizable": false,
         "visible": false,
-        "shadow": true,
-        "center": true,
-        "windowEffects": { "effects": ["acrylic"], "color": [14, 14, 20, 120] }
+        "shadow": false,
+        "center": true
       }
     ],
     "security": {

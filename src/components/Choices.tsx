@@ -11,12 +11,12 @@ export function Choices({ request, onAnswer }: Props) {
   return (
     <div className="choices">
       <p className="choices-question">{request.question}</p>
-      <div className="choices-row">
+      <div className="chips">
         {request.choices.map((choice, i) => (
           <button
             key={choice}
             type="button"
-            className={`choice ${confirm && i === 0 ? "choice-primary" : ""}`}
+            className={`chip ${confirm && i === 0 ? "chip-primary" : ""}`}
             onClick={() => onAnswer(choice)}
           >
             {(!confirm || i === 0 || i === request.choices.length - 1) && (

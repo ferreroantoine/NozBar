@@ -6,6 +6,7 @@ import { startMcpBridge } from "./lib/mcp-bridge";
 import { ClaudeProvider } from "./lib/providers/claude";
 import { ClaudeCodeProvider } from "./lib/providers/claude-code";
 import { GeminiProvider } from "./lib/providers/gemini";
+import { GroqTranscriber } from "./lib/providers/groq";
 import { onFocusLost, type InputState } from "./lib/focus";
 import { settingsStore, type Settings } from "./lib/settings";
 import { native, type Provider } from "./lib/native";
@@ -13,22 +14,29 @@ import { Pending, type PendingRequest } from "./lib/pending";
 import { Recorder, toWavBase64 } from "./lib/recorder";
 import { setupAfterClose } from "./lib/setup";
 import { matchLocal } from "./lib/router";
+import { advanceSteps, type Step } from "./lib/steps";
 import { errorMessage, executeTool, type Source, type ToolContext, type Ui } from "./lib/tools";
-import { Choices } from "./components/Choices";
-import { Markdown } from "./components/Markdown";
-import { Orb, type OrbState } from "./components/Orb";
-import { Sources } from "./components/Sources";
+import { loadDefaultBrowser } from "./lib/tools/browser";
+import { setVision } from "./lib/tools/screen";
+import { Bubble } from "./components/Bubble";
 
 const WIDTH = 680;
 const MAX_HEIGHT = 620;
+/** Marges transparentes de .stage autour de la bulle, pour que son ombre ne soit pas coupée. */
+const STAGE_MARGIN = 50;
 const CLOSE_MS = 140;
 /** Un enregistrement plus court est considéré comme un appui accidentel. */
 const MIN_SPEECH_SECONDS = 0.35;
+/** Durée parlée minimale (hors silence) pour qu'un message vocal soit transcrit. */
+const MIN_VOICED_SECONDS = 0.2;
+/** Au-delà, l'écoute s'arrête d'elle-même. */
+const MAX_LISTEN_MS = 60_000;
 /** Ignore la perte de focus juste après l'ouverture. */
 const BLUR_GRACE_MS = 300;
 
 const KEY_COMMAND = /^\/(?:cle|clé|key)$/i;
 const CLAUDE_KEY_COMMAND = /^\/(?:cle|clé|key)[- ]?claude$/i;
+const GROQ_KEY_COMMAND = /^\/(?:cle|clé|key)[- ]?groq$/i;
 const SETTINGS_COMMAND = /^\/(?:param[eè]tres|reglages|réglages|settings)$/i;
 
 /** Réponses à une demande d'autorisation (Entrée = autoriser, Échap = refuser, « Toujours » au clic seulement). */
@@ -39,14 +47,8 @@ const LAUNCH_REFOCUS_MS = 4000;
 const KEY_PLACEHOLDER: Record<Provider, string> = {
   gemini: "Collez votre clé API Gemini, puis Entrée",
   anthropic: "Collez votre clé API Claude (Anthropic), puis Entrée — vide pour la supprimer",
+  groq: "Collez votre clé API Groq (dictée Whisper), puis Entrée — vide pour la supprimer",
 };
-
-/** Palier typographique : il ne fait que descendre pendant le streaming. */
-function tier(text: string): "short" | "medium" | "long" {
-  if (text.length < 60 && !text.includes("\n")) return "short";
-  if (text.length < 300 && !/\n\s*([-*]|\d+\.)\s/.test(text)) return "medium";
-  return "long";
-}
 
 const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortError";
 
@@ -60,6 +62,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [prompt, setPrompt] = useState("");
   const [status, setStatus] = useState("");
+  const [steps, setSteps] = useState<Step[]>([]);
   const [answer, setAnswer] = useState("");
   const [sources, setSources] = useState<Source[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -75,7 +78,12 @@ export default function App() {
   const claudeRef = useRef<ClaudeProvider | null>(null);
   /** Claude Code connecté à l'abonnement : prioritaire sur l'API. */
   const claudeCodeRef = useRef<ClaudeCodeProvider | null>(null);
+  /** Dictée par Whisper (Groq) si une clé est enregistrée ; sinon Gemini transcrit. */
+  const groqRef = useRef<GroqTranscriber | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
+  /** Vocabulaire de la transcription, lu pendant que l'utilisateur parle. */
+  const hintsRef = useRef<Promise<string[]>>(Promise.resolve([]));
+  const listenTimer = useRef<number | undefined>(undefined);
   const abortRef = useRef<AbortController | null>(null);
   const closeTimer = useRef<number | undefined>(undefined);
   const openRef = useRef(false);
@@ -93,6 +101,7 @@ export default function App() {
     abortRef.current = null;
     setBusy(false);
     setStatus("");
+    setSteps([]);
     setPrompt("");
     setAnswer("");
     setSources([]);
@@ -132,6 +141,11 @@ export default function App() {
 
   // ---------- Tour de conversation ----------
 
+  function showStatus(label: string) {
+    setStatus(label);
+    setSteps((list) => advanceSteps(list, label, Date.now()));
+  }
+
   async function submit(raw: string) {
     const text = raw.trim();
     if (!text) return;
@@ -141,7 +155,13 @@ export default function App() {
       void native.openPreferences();
       return;
     }
-    const keyFor = CLAUDE_KEY_COMMAND.test(text) ? "anthropic" : KEY_COMMAND.test(text) ? "gemini" : null;
+    const keyFor = CLAUDE_KEY_COMMAND.test(text)
+      ? "anthropic"
+      : GROQ_KEY_COMMAND.test(text)
+        ? "groq"
+        : KEY_COMMAND.test(text)
+          ? "gemini"
+          : null;
     if (keyFor) {
       setInput("");
       resetTurn();
@@ -155,12 +175,12 @@ export default function App() {
     setInput("");
     setPrompt(text);
     // Jamais d'interface vide : un état générique s'affiche dès l'envoi.
-    setStatus("Réflexion…");
+    showStatus("Réflexion…");
     setBusy(true);
 
     const live = () => !ctrl.signal.aborted;
     const ui: Ui = {
-      status: (s) => live() && (setStatus(s), setBusy(true)),
+      status: (s) => live() && (showStatus(s), setBusy(true)),
       text: (d) => live() && setAnswer((a) => a + d),
       sources: (list) => live() && setSources(list),
       // Une question d'un tour annulé ne doit jamais apparaître dans une bulle rouverte.
@@ -191,7 +211,11 @@ export default function App() {
     };
 
     try {
-      const intent = matchLocal(text);
+      const local = matchLocal(text);
+      // « Ferme Steam » alors qu'un souvenir parle de Steam : c'est l'IA, qui le connaît, qui s'en charge.
+      const target = local?.kind === "tool" ? local.args.name : undefined;
+      const intent =
+        typeof target === "string" && assistantRef.current && settingsStore.memoriesAbout(target).length ? null : local;
       if (intent?.kind === "reply") {
         setAnswer(intent.text);
         finish();
@@ -217,7 +241,7 @@ export default function App() {
           return;
         }
         // Ex. « ouvre les paramètres bluetooth » : pas une app, le LLM saura quel outil prendre.
-        setStatus("Réflexion…");
+        showStatus("Réflexion…");
       }
       await requireAssistant().send(text, ui, ctrl.signal);
       finish();
@@ -226,6 +250,20 @@ export default function App() {
       setError(errorMessage(e));
       setBusy(false);
     }
+  }
+
+  /** Whisper d'abord ; en cas de panne ou de quota Groq, Gemini prend le relais. */
+  async function transcribe(wav: string, signal: AbortSignal, hints: string[]): Promise<string> {
+    const groq = groqRef.current;
+    if (groq) {
+      try {
+        return await groq.transcribe(wav, signal, hints);
+      } catch (e) {
+        if (signal.aborted || isAbort(e)) throw e;
+        console.warn("[groq] transcription impossible, repli sur Gemini :", e);
+      }
+    }
+    return requireAssistant().transcribe(wav, signal, hints);
   }
 
   function requireAssistant(): Conversation {
@@ -238,9 +276,14 @@ export default function App() {
 
   function applyKey(provider: Provider, key: string | null) {
     if (provider === "gemini") {
-      assistantRef.current = key
-        ? new Conversation(new GeminiProvider(key), () => claudeCodeRef.current ?? claudeRef.current)
+      const gemini = key ? new GeminiProvider(key) : null;
+      assistantRef.current = gemini
+        ? new Conversation(gemini, () => claudeCodeRef.current ?? claudeRef.current)
         : null;
+      // C'est Gemini qui regarde les captures d'écran, quel que soit le modèle qui les demande.
+      setVision(gemini && ((image, question, signal) => gemini.describeImage(image, question, signal)));
+    } else if (provider === "groq") {
+      groqRef.current = key ? new GroqTranscriber(key) : null;
     } else {
       claudeRef.current = key ? new ClaudeProvider(key) : null;
     }
@@ -271,17 +314,47 @@ export default function App() {
 
   // ---------- Push-to-talk ----------
 
+  /** Raccourci tout juste enfoncé : le micro démarre tout de suite, au cas où ce serait un appui long. */
+  function primeListening() {
+    if (setup || !assistantRef.current || listening) return;
+    recorderRef.current?.cancel();
+    const rec = new Recorder();
+    recorderRef.current = rec;
+    hintsRef.current = native.speechHints().catch(() => []);
+    rec.start(setLevel).catch((e) => {
+      if (recorderRef.current !== rec) return;
+      recorderRef.current = null;
+      // Si l'écoute a déjà commencé, elle ne doit pas rester affichée sans micro derrière.
+      setListening(false);
+      setStatus("");
+      setError(`Micro indisponible : ${errorMessage(e)}`);
+    });
+  }
+
+  /** Appui court : ce n'était pas une prise de parole. */
+  function cancelPrimed() {
+    if (listening) return;
+    recorderRef.current?.cancel();
+    recorderRef.current = null;
+    setLevel(0);
+  }
+
   function startListening() {
     if (setup || !assistantRef.current) {
       setSetup(setup ?? "gemini");
       return;
     }
     resetTurn();
-    recorderRef.current?.cancel();
-    const rec = new Recorder();
-    recorderRef.current = rec;
     setListening(true);
     setStatus("Je vous écoute…");
+    // Filet de sécurité : jamais d'écoute sans fin, même si le relâchement de la touche se perdait.
+    window.clearTimeout(listenTimer.current);
+    listenTimer.current = window.setTimeout(() => void handlers.current.stopListening(), MAX_LISTEN_MS);
+    // Déjà en route depuis l'appui : on garde l'enregistrement, et donc les premiers mots.
+    if (recorderRef.current) return;
+    const rec = new Recorder();
+    recorderRef.current = rec;
+    hintsRef.current = native.speechHints().catch(() => []);
     rec.start(setLevel).catch((e) => {
       if (recorderRef.current !== rec) return;
       recorderRef.current = null;
@@ -292,11 +365,15 @@ export default function App() {
   }
 
   async function stopListening() {
+    window.clearTimeout(listenTimer.current);
     const rec = recorderRef.current;
-    if (!rec) return;
     recorderRef.current = null;
     setListening(false);
     setLevel(0);
+    if (!rec) {
+      setStatus("");
+      return;
+    }
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -305,13 +382,21 @@ export default function App() {
       if (!blob) return setStatus("");
       setStatus("Transcription…");
       setBusy(true);
-      const { data, seconds } = await toWavBase64(blob);
+      const { data, seconds, speech } = await toWavBase64(blob);
       if (seconds < MIN_SPEECH_SECONDS) {
         setBusy(false);
         setStatus("");
         return;
       }
-      const text = await requireAssistant().transcribe(data, ctrl.signal);
+      // Rien de dit : on n'interroge pas l'IA, qui inventerait une commande sur le silence.
+      if (speech < MIN_VOICED_SECONDS) {
+        setBusy(false);
+        setStatus("");
+        setError("Je n'ai rien entendu.");
+        return;
+      }
+      const hints = [...(await hintsRef.current), ...settingsStore.memories];
+      const text = await transcribe(data, ctrl.signal, hints);
       if (ctrl.signal.aborted) return;
       if (!text) {
         setBusy(false);
@@ -363,8 +448,12 @@ export default function App() {
   }
 
   // Les écouteurs Tauri sont branchés une seule fois : ils passent par une ref vers les handlers à jour.
-  const handlers = useRef({ openBubble, close, startListening, stopListening, onKey, applyKey, refreshClaudeCode });
-  handlers.current = { openBubble, close, startListening, stopListening, onKey, applyKey, refreshClaudeCode };
+  const handlers = useRef({
+    openBubble, close, primeListening, cancelPrimed, startListening, stopListening, onKey, applyKey, refreshClaudeCode,
+  });
+  handlers.current = {
+    openBubble, close, primeListening, cancelPrimed, startListening, stopListening, onKey, applyKey, refreshClaudeCode,
+  };
 
   useEffect(() => {
     native.getShortcut().then((s) => s && setShortcut(s), () => {});
@@ -377,14 +466,24 @@ export default function App() {
     );
     // Sans clé Claude, NozBar fonctionne : seul le passage à l'expert est indisponible.
     native.getApiKey("anthropic").then((key) => handlers.current.applyKey("anthropic", key), () => {});
+    native.getApiKey("groq").then((key) => handlers.current.applyKey("groq", key), () => {});
     handlers.current.refreshClaudeCode();
     native.getSettings().then((s) => settingsStore.replace(s), () => {});
+    void loadDefaultBrowser();
     // Claude Code appelle les outils NozBar par le serveur MCP : ils s'exécutent dans le tour en cours.
     const stopBridge = startMcpBridge(() => claudeCodeRef.current?.active ?? null);
 
     const subscriptions = [
       listen("bubble:open", () => handlers.current.openBubble()),
       listen("bubble:close", () => handlers.current.close()),
+      // Clic hors de la bulle, ou Échap alors qu'elle n'a pas le focus (Windows le lui refuse parfois).
+      listen("bubble:outside", () => {
+        if (!openRef.current || recorderRef.current || Date.now() - openedAt.current < BLUR_GRACE_MS) return;
+        handlers.current.close();
+      }),
+      listen("bubble:escape", () => handlers.current.onKey(new KeyboardEvent("keydown", { key: "Escape" }))),
+      listen("ptt:prime", () => handlers.current.primeListening()),
+      listen("ptt:cancel", () => handlers.current.cancelPrimed()),
       listen("ptt:start", () => handlers.current.startListening()),
       listen("ptt:end", () => void handlers.current.stopListening()),
       // Réglages modifiés dans la fenêtre de paramètres : appliqués tout de suite.
@@ -427,7 +526,8 @@ export default function App() {
     const win = getCurrentWindow();
     let last = 0;
     const observer = new ResizeObserver(() => {
-      const height = Math.min(Math.ceil(el.getBoundingClientRect().height), MAX_HEIGHT);
+      // offsetHeight : la hauteur de mise en page, sans l'échelle de l'animation d'ouverture.
+      const height = Math.min(el.offsetHeight, MAX_HEIGHT) + STAGE_MARGIN;
       if (height !== last) {
         last = height;
         void win.setSize(new LogicalSize(WIDTH, height));
@@ -446,50 +546,41 @@ export default function App() {
     else void submit(input);
   };
 
-  const orbState: OrbState = listening ? "listening" : busy ? "thinking" : "idle";
   const placeholder = setup
     ? KEY_PLACEHOLDER[setup]
-    : `Demandez quelque chose… ou maintenez ${shortcut} pour parler`;
-  const hasBody = Boolean(prompt || answer || status || error || sources.length || question);
+    : question?.kind === "confirm"
+      ? "Entrée pour valider, Échap pour annuler"
+      : answer || prompt
+        ? "Demandez autre chose…"
+        : "Demandez quelque chose…";
 
   return (
-    <div ref={bubbleRef} className={`bubble ${open ? "is-open" : ""}`}>
-      <form className="bar" onSubmit={onSubmit}>
-        <Orb state={orbState} level={level} />
-        <input
-          ref={inputRef}
-          className="input"
-          type={setup ? "password" : "text"}
-          value={input}
-          onChange={(e) => {
-                    setInput(e.target.value);
-          }}
-          placeholder={placeholder}
-          spellCheck={false}
-          autoComplete="off"
-          disabled={listening}
-        />
-        {expert && (
-          <span className="badge" title={`Claude ${expert} répond jusqu'à la fermeture de la bulle`}>
-            {expert}
-          </span>
-        )}
-      </form>
-
-      {hasBody && (
-        <div className="body">
-          {prompt && <p className="prompt">{prompt}</p>}
-          {answer && (
-            <Markdown className={`answer answer-${tier(answer)}`} text={answer} onLink={openExternal} />
-          )}
-          {status && (busy || listening) && !question && (
-            <p className={`status ${listening ? "status-listening" : ""}`}>{status}</p>
-          )}
-          {question && <Choices request={question} onAnswer={(choice) => pending.answer(choice)} />}
-          <Sources sources={sources} onOpen={openExternal} />
-          {error && <p className="error">{error}</p>}
-        </div>
-      )}
-    </div>
+    <Bubble
+      bubbleRef={bubbleRef}
+      inputRef={inputRef}
+      open={open}
+      secret={setup !== null}
+      listening={listening}
+      busy={busy}
+      level={level}
+      input={input}
+      placeholder={placeholder}
+      prompt={prompt}
+      status={status}
+      steps={steps}
+      answer={answer}
+      sources={sources}
+      error={error}
+      shortcut={shortcut}
+      question={question}
+      expert={expert}
+      onInput={setInput}
+      onSubmit={onSubmit}
+      onClose={close}
+      onAnswer={(choice) => pending.answer(choice)}
+      onLink={openExternal}
+      onTalkStart={startListening}
+      onTalkEnd={() => void stopListening()}
+    />
   );
 }
